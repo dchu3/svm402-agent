@@ -2,7 +2,7 @@ import { wrapFetchWithPayment, x402Client, decodePaymentResponseHeader } from '@
 import { ExactEvmScheme } from '@x402/evm';
 import type { SettleResponse } from '@x402/core/types';
 import type { Wallet } from '../wallet.js';
-import { debug, info } from '../util/log.js';
+import { debug } from '../util/log.js';
 
 export interface PaymentReceipt {
   endpoint: string;
@@ -68,7 +68,7 @@ export function createOracleClient({ baseUrl, wallet }: OracleClientOptions): Or
             errorReason: settle.errorReason,
           };
           receipts.push(receipt);
-          info(
+          debug(
             `[receipt] ${path} ${receipt.success ? '✓ settled' : '✗ failed'} tx=${receipt.transaction} (${receipt.network})${receipt.amountAtomic ? ` amount=${receipt.amountAtomic}` : ''}`,
           );
         } catch (err) {

@@ -28,14 +28,28 @@ npm start
 Example session:
 
 ```
-svm402> Is 0x4200000000000000000000000000000000000006 safe?
-[receipt] /api/v1/x402/base/token/0x4200…/report ✓ settled tx=0xabc… (eip155:8453)
-WETH (Wrapped Ether) on Base looks clean — risk score 0/10. Liquidity ~$8.4M…
+╭──────────────────────────────── 0xAbCd…1234 ╮
+│ svm402-agent                                │
+│ Gemini × x402 client for base-token-oracle  │
+│ ⚠  signs REAL USDC payments on Base (8453)  │
+│                                             │
+│ oracle    https://svm402.com                │
+│ wallet    0xAbCdEf…1234                     │
+│ balance   1.234567 USDC                     │
+│ model     gemini-3.1-flash-lite-preview      │
+│ spend cap $0.100 USDC / session             │
+╰─────────────────────────────────────────────╯
+  Type /help for commands. Ctrl-C or /quit to exit.
 
-svm402> /spend
-session spend: $0.0300 USDC (cap $0.100)
+[$0.0000 / $0.100 • 0 calls] svm402❯ Is 0x4200000000000000000000000000000000000006 safe?
+⚡ get_report(0x4200…0006) … signing & settling on Base
+✓ get_report  →  risk 0/10 · clean  •  $0.030 USDC  •  tx 0xabc123…def4
+🤖  WETH on Base looks clean — risk score 0/10. Liquidity ~$8.4M…
 
-svm402> /quit
+[$0.0300 / $0.100 • 1 call] svm402❯ /spend
+session spend  ███████░░░░░░░░░░░░░░░░░  $0.0300 / $0.100  (30%)
+
+[$0.0300 / $0.100 • 1 call] svm402❯ /quit
 bye.
 ```
 
@@ -46,9 +60,15 @@ bye.
 | `ORACLE_URL` | no | `https://svm402.com` | Base URL of a running base-token-oracle |
 | `PRIVATE_KEY` | **yes** | — | 0x-prefixed 32-byte hex; wallet must hold USDC on Base |
 | `GEMINI_API_KEY` | **yes** | — | from [aistudio.google.com](https://aistudio.google.com/app/apikey) |
-| `GEMINI_MODEL` | no | `gemini-2.5-flash` | also fine: `gemini-2.5-pro` |
+| `GEMINI_MODEL` | no | `gemini-3.1-flash-lite-preview` | preview model; also fine: `gemini-2.5-flash`, `gemini-2.5-pro` |
 | `MAX_SPEND_USDC` | no | `0.10` | Hard cap on cumulative session spend |
 | `DEBUG` | no | `0` | `1` for verbose logs |
+| `NO_COLOR` | no | unset | Standard env var; disables all colors when set |
+| `SVM402_ASCII` | no | `0` | `1` falls back to plain ASCII glyphs/borders (for picky terminals) |
+| `SVM402_PROMPT` | no | `rich` | `plain` falls back to `svm402> ` prompt |
+| `SVM402_NO_SPINNER` | no | `0` | `1` disables in-flight spinners (useful when piping output) |
+
+Colors and spinners auto-disable when stdout is not a TTY (e.g., piped to `tee`), so logs stay clean.
 
 ## Funding the wallet
 
@@ -90,6 +110,14 @@ You only need a few cents of USDC on Base. Easiest paths:
                           @x402/evm        signs USDC transferWithAuthorization
                           viem wallet
 ```
+
+## Troubleshooting
+
+### `400 INVALID_ARGUMENT: Function call is missing a thought_signature`
+
+Gemini 2.5 / 3.x thinking models attach a `thoughtSignature` to every `functionCall` part. The signature must round-trip back to the API verbatim with the next `functionResponse`, otherwise the request fails strict validation. This requires `@google/genai >= 1.x` (the v0.x `Chat` helper drops signatures during history curation).
+
+If you see this error, run `npm install` to make sure you're on the lockfile's pinned SDK version. See [Gemini docs on thought signatures](https://ai.google.dev/gemini-api/docs/thought-signatures).
 
 ## Caveats
 

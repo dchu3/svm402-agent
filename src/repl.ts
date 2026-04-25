@@ -1,9 +1,25 @@
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import type { Agent } from './agent.js';
+import type { Agent, ToolCallEvent, ToolEndEvent } from './agent.js';
 import type { OracleClient } from './oracle/client.js';
 import type { Wallet } from './wallet.js';
 import type { SpendTracker } from './oracle/handlers.js';
+import { buildPrompt } from './ui/prompt.js';
+import {
+  printAgent,
+  printError,
+  printInfo,
+  printToolEnd,
+  formatToolStart,
+} from './ui/render.js';
+import {
+  renderBalanceTable,
+  renderHelp,
+  renderReceiptsTable,
+  renderSpendBar,
+} from './ui/tables.js';
+import { startSpinner, type SpinnerHandle } from './ui/spinner.js';
+import { getTheme } from './ui/theme.js';
 
 export interface ReplDeps {
   agent: Agent;
@@ -12,98 +28,144 @@ export interface ReplDeps {
   spend: SpendTracker;
 }
 
-const HELP = `
-Slash commands:
-  /help              Show this help
-  /balance           Show wallet address + USDC balance on Base
-  /spend             Show session spend (USDC)
-  /receipts          Show all settled payment receipts this session
-  /clear             Reset Gemini chat history (does not refund spend)
-  /quit, /exit       Leave the REPL
-
-Tools available to Gemini:
-  get_market(address)              $0.005 USDC
-  get_honeypot(address)            $0.010 USDC
-  get_forensics(address, pair?)    $0.020 USDC
-  get_report(address, pair?)       $0.030 USDC
-
-Anything else is sent to Gemini.
-`.trim();
+function buildSummary(ev: ToolEndEvent): string | undefined {
+  if (!ev.result.ok) return undefined;
+  const data = ev.result.data as Record<string, unknown> | undefined;
+  if (!data) return undefined;
+  const risk = (data as { risk?: { score?: number; level?: string } }).risk;
+  if (risk && typeof risk.score === 'number') {
+    return `risk ${risk.score}/10${risk.level ? ' · ' + risk.level : ''}`;
+  }
+  if (typeof (data as { is_honeypot?: boolean }).is_honeypot === 'boolean') {
+    return (data as { is_honeypot: boolean }).is_honeypot ? 'honeypot detected' : 'not a honeypot';
+  }
+  if (typeof (data as { price_usd?: number }).price_usd === 'number') {
+    const p = (data as { price_usd: number }).price_usd;
+    return `price $${p.toLocaleString(undefined, { maximumFractionDigits: 6 })}`;
+  }
+  if (typeof (data as { holder_count?: number }).holder_count === 'number') {
+    const h = (data as { holder_count: number }).holder_count;
+    return `${h.toLocaleString()} holders`;
+  }
+  return undefined;
+}
 
 export async function startRepl(deps: ReplDeps): Promise<void> {
   const rl = readline.createInterface({ input, output, terminal: true });
-  rl.setPrompt('svm402> ');
-  console.log('Type /help for commands. Ctrl-C or /quit to exit.');
+  const refreshPrompt = (): void => {
+    rl.setPrompt(
+      buildPrompt({
+        spend: deps.spend.total,
+        cap: deps.spend.cap,
+        receipts: deps.oracle.receipts.length,
+      }),
+    );
+  };
+  refreshPrompt();
   rl.prompt();
 
+  let activeSpinner: SpinnerHandle | null = null;
+
+  const clearSpinner = (): void => {
+    const s = activeSpinner;
+    if (s) {
+      s.stopAndClear();
+      activeSpinner = null;
+    }
+  };
+
   rl.on('SIGINT', () => {
-    console.log('\nuse /quit to exit.');
+    clearSpinner();
+    output.write('\n');
+    printInfo('use /quit to exit.');
+    refreshPrompt();
     rl.prompt();
   });
+
+  const onToolStart = (ev: ToolCallEvent): void => {
+    activeSpinner = startSpinner(formatToolStart(ev.name, ev.args));
+  };
+  const onToolEnd = (ev: ToolEndEvent): void => {
+    clearSpinner();
+    printToolEnd({
+      name: ev.name,
+      ok: ev.result.ok,
+      priceUsd: ev.priceUsd,
+      ...(ev.receipt?.transaction ? { txHash: ev.receipt.transaction } : {}),
+      ...(ev.receipt?.network ? { network: ev.receipt.network } : {}),
+      ...(ev.result.error ? { error: ev.result.error } : {}),
+      ...((): { summary?: string } => {
+        const s = buildSummary(ev);
+        return s ? { summary: s } : {};
+      })(),
+    });
+  };
 
   for await (const rawLine of rl) {
     const line = rawLine.trim();
     if (!line) {
+      refreshPrompt();
       rl.prompt();
       continue;
     }
     if (line === '/quit' || line === '/exit') break;
     if (line === '/help') {
-      console.log(HELP);
+      output.write(renderHelp() + '\n');
+      refreshPrompt();
       rl.prompt();
       continue;
     }
     if (line === '/balance') {
       try {
         const { formatted } = await deps.wallet.usdcBalance();
-        console.log(`address: ${deps.wallet.address}\nUSDC on Base: ${formatted}`);
+        output.write(
+          renderBalanceTable({ address: deps.wallet.address, usdcFormatted: formatted }) + '\n',
+        );
       } catch (err) {
-        console.error('balance lookup failed:', err instanceof Error ? err.message : err);
+        printError('balance lookup failed', err instanceof Error ? err.message : String(err));
       }
+      refreshPrompt();
       rl.prompt();
       continue;
     }
     if (line === '/spend') {
-      console.log(
-        `session spend: $${deps.spend.total.toFixed(4)} USDC (cap $${deps.spend.cap.toFixed(3)})`,
-      );
+      output.write(renderSpendBar(deps.spend.total, deps.spend.cap) + '\n');
+      refreshPrompt();
       rl.prompt();
       continue;
     }
     if (line === '/receipts') {
-      if (deps.oracle.receipts.length === 0) {
-        console.log('no receipts yet.');
-      } else {
-        for (const r of deps.oracle.receipts) {
-          console.log(
-            `  ${r.endpoint}  ${r.success ? '✓' : '✗'}  tx=${r.transaction}  ${r.network}${r.amountAtomic ? `  amount=${r.amountAtomic}` : ''}`,
-          );
-        }
-      }
+      output.write(renderReceiptsTable(deps.oracle.receipts) + '\n');
+      refreshPrompt();
       rl.prompt();
       continue;
     }
     if (line === '/clear') {
       deps.agent.reset();
-      console.log('chat history cleared.');
+      printInfo('chat history cleared.');
+      refreshPrompt();
       rl.prompt();
       continue;
     }
     if (line.startsWith('/')) {
-      console.log(`unknown command: ${line}. Type /help.`);
+      printError(`unknown command: ${line}`, 'type /help for the list of commands.');
+      refreshPrompt();
       rl.prompt();
       continue;
     }
 
     try {
-      const reply = await deps.agent.send(line);
-      console.log(reply || '[no text response]');
+      const reply = await deps.agent.send(line, { onToolStart, onToolEnd });
+      printAgent(reply);
     } catch (err) {
-      console.error('agent error:', err instanceof Error ? err.message : err);
+      clearSpinner();
+      printError('agent error', err instanceof Error ? err.message : String(err));
     }
+    refreshPrompt();
     rl.prompt();
   }
 
   rl.close();
-  console.log('bye.');
+  const t = getTheme();
+  output.write(t.colors.dim('bye.\n'));
 }

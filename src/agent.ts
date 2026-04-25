@@ -1,6 +1,7 @@
 import { GoogleGenAI, type Chat, type FunctionCall } from '@google/genai';
 import { TOOL_DECLARATIONS } from './oracle/tools.js';
-import { handlers, type HandlerDeps } from './oracle/handlers.js';
+import { handlers, type HandlerDeps, TOOL_PRICES_USD, type ToolCallResult } from './oracle/handlers.js';
+import type { PaymentReceipt } from './oracle/client.js';
 import { debug } from './util/log.js';
 
 const SYSTEM_INSTRUCTION = `
@@ -19,14 +20,30 @@ costs real USDC on Base mainnet, so:
 - Token addresses must be 0x-prefixed 40 hex chars on Base mainnet (chainId 8453).
 `.trim();
 
+export interface ToolCallEvent {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+export interface ToolEndEvent extends ToolCallEvent {
+  result: ToolCallResult;
+  priceUsd: number;
+  receipt?: PaymentReceipt;
+}
+
 export interface AgentDeps extends HandlerDeps {
   apiKey: string;
   model: string;
 }
 
+export interface SendHooks {
+  onToolStart?: (ev: ToolCallEvent) => void;
+  onToolEnd?: (ev: ToolEndEvent) => void;
+}
+
 export interface Agent {
   chat: Chat;
-  send(message: string): Promise<string>;
+  send(message: string, hooks?: SendHooks): Promise<string>;
   reset(): void;
 }
 
@@ -49,7 +66,7 @@ export function createAgent(deps: AgentDeps): Agent {
     reset() {
       chat = buildChat();
     },
-    async send(message: string): Promise<string> {
+    async send(message: string, hooks?: SendHooks): Promise<string> {
       let response = await chat.sendMessage({ message });
       let safetyHops = 0;
       while (response.functionCalls && response.functionCalls.length > 0) {
@@ -73,7 +90,20 @@ export function createAgent(deps: AgentDeps): Agent {
             });
             continue;
           }
+          hooks?.onToolStart?.({ name, args });
+          const receiptsBefore = deps.oracle.receipts.length;
           const result = await handler(args, deps);
+          const newReceipt =
+            deps.oracle.receipts.length > receiptsBefore
+              ? deps.oracle.receipts[deps.oracle.receipts.length - 1]
+              : undefined;
+          hooks?.onToolEnd?.({
+            name,
+            args,
+            result,
+            priceUsd: TOOL_PRICES_USD[name] ?? 0,
+            ...(newReceipt ? { receipt: newReceipt } : {}),
+          });
           functionResponses.push({ name, response: result as unknown as Record<string, unknown> });
         }
         response = await chat.sendMessage({

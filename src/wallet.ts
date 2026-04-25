@@ -28,10 +28,17 @@ export interface Wallet {
 }
 
 export function createWallet(privateKey: string): Wallet {
-  if (!privateKey || !/^0x[0-9a-fA-F]{64}$/.test(privateKey)) {
-    throw new Error('PRIVATE_KEY must be a 0x-prefixed 32-byte hex string.');
+  if (!privateKey) {
+    throw new Error('PRIVATE_KEY is required.');
   }
-  const account = privateKeyToAccount(privateKey as `0x${string}`);
+  
+  // Normalize: add 0x prefix if missing
+  const normalized = privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`;
+  
+  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error('PRIVATE_KEY must be a 64-character hex string (32 bytes), optionally prefixed with 0x.');
+  }
+  const account = privateKeyToAccount(normalized as `0x${string}`);
 
   const publicClient = createPublicClient({
     chain: base,
