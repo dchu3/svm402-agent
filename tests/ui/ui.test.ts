@@ -108,11 +108,11 @@ describe('receipts table', () => {
     const out = strip(
       renderReceiptsTable([
         {
-          endpoint: '/api/v1/x402/base/token/0xabc/market',
+          endpoint: '/api/v1/x402/base/token/0xabc/report',
           success: true,
           transaction: '0x' + 'a'.repeat(64),
           network: 'eip155:8453',
-          amountAtomic: '5000',
+          amountAtomic: '30000',
         },
         {
           endpoint: '/api/v1/x402/base/token/0xdef/report',
@@ -122,7 +122,7 @@ describe('receipts table', () => {
         },
       ]),
     );
-    expect(out).toContain('market');
+    expect(out).toContain('report');
     expect(out).toContain('eip155:8453');
     expect(out).toContain('total:');
     expect(out).toContain('1 failed');
@@ -136,9 +136,9 @@ describe('help', () => {
     expect(out).toContain('/help');
     expect(out).toContain('/balance');
     expect(out).toContain('Tools available to Gemini');
-    expect(out).toContain('get_market');
-    expect(out).toContain('$0.005');
-    expect(out).toContain('$0.030');
+    expect(out).not.toContain('get_market');
+    expect(out).toContain('get_report');
+    expect(out).toContain('$0.010');
   });
 });
 

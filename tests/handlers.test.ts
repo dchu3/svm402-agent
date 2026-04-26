@@ -27,38 +27,9 @@ describe('handlers', () => {
       oracle: fakeOracle(async () => ({})),
       spend: createSpendTracker(1),
     };
-    const result = await handlers.get_market!({ address: 'nope' }, deps);
+    const result = await handlers.get_report!({ address: 'nope' }, deps);
     expect(result.ok).toBe(false);
     expect(result.error).toBe('invalid_address');
-  });
-
-  it('lower-cases the address and hits the right path for /market', async () => {
-    const oracle = fakeOracle(async (path) => ({
-      address: path.split('/')[6] ?? '',
-      chain: 'base',
-      price_usd: 1.0,
-      price_change_24h_pct: 0,
-      fdv: null,
-      market_cap: null,
-      volume_24h_usd: 0,
-      liquidity_usd: 0,
-      top_pool: {
-        pair_address: null,
-        dex_id: null,
-        base_token_symbol: null,
-        quote_token_symbol: null,
-        pair_created_at: null,
-      },
-      pool_count: 0,
-    }));
-    const spend = createSpendTracker(1);
-    const result = await handlers.get_market!({ address: VALID_ADDR.toUpperCase() }, {
-      oracle,
-      spend,
-    });
-    expect(result.ok).toBe(true);
-    expect(oracle.calls[0]).toBe(`/api/v1/x402/base/token/${VALID_ADDR.toLowerCase()}/market`);
-    expect(spend.total).toBeCloseTo(0.005);
   });
 
   it('refuses calls past the spend cap', async () => {
@@ -68,18 +39,5 @@ describe('handlers', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/spend_cap_exceeded/);
     expect(oracle.calls).toHaveLength(0);
-  });
-
-  it('appends ?pair= when forensics is given a valid pair', async () => {
-    const oracle = fakeOracle(async () => ({ address: VALID_ADDR, chain: 'base' }));
-    const pair = '0x0000000000000000000000000000000000000abc';
-    const result = await handlers.get_forensics!(
-      { address: VALID_ADDR, pair },
-      { oracle, spend: createSpendTracker(1) },
-    );
-    expect(result.ok).toBe(true);
-    expect(oracle.calls[0]).toBe(
-      `/api/v1/x402/base/token/${VALID_ADDR}/forensics?pair=${pair}`,
-    );
   });
 });

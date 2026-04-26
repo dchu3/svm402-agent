@@ -172,9 +172,6 @@ const SLASH_ROWS: HelpRow[] = [
 ];
 
 const TOOL_ROWS: HelpRow[] = [
-  { cmd: 'get_market(address)', desc: 'DexScreener market summary', price: TOOL_PRICES_USD.get_market },
-  { cmd: 'get_honeypot(address)', desc: 'Honeypot.is simulation', price: TOOL_PRICES_USD.get_honeypot },
-  { cmd: 'get_forensics(address, pair?)', desc: 'Blockscout on-chain forensics', price: TOOL_PRICES_USD.get_forensics },
   { cmd: 'get_report(address, pair?)', desc: 'Composite report + risk score', price: TOOL_PRICES_USD.get_report },
 ];
 
