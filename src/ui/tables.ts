@@ -172,7 +172,7 @@ const SLASH_ROWS: HelpRow[] = [
 ];
 
 const TOOL_ROWS: HelpRow[] = [
-  { cmd: 'get_report(address, pair?)', desc: 'Composite report + risk score', price: TOOL_PRICES_USD.get_report },
+  { cmd: 'get_report(address, pair?)', desc: 'Token report', price: TOOL_PRICES_USD.get_report },
 ];
 
 function renderRows(rows: HelpRow[]): string {

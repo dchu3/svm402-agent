@@ -4,7 +4,7 @@ export const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: 'get_report',
     description:
-      'Composite due-diligence report fanning out to market + honeypot + forensics, plus a deterministic risk score (0–10), risk level (clean/caution/risky/critical), and risk flags. Best single tool for "is this token safe?". Costs $0.01 USDC.',
+      'Fetch a comprehensive Token report for a Base mainnet ERC-20 token (including optional risk score and flags). Best single tool for "is this token safe?". Costs $0.01 USDC.',
     parameters: {
       type: Type.OBJECT,
       properties: {

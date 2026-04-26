@@ -53,7 +53,7 @@ export function createOracleClient({ baseUrl, wallet }: OracleClientOptions): Or
       debug('GET', url);
       const res = await payFetch(url, { method: 'GET' });
       const status = res.status;
-      const paymentRespHeader = res.headers.get('x-payment-response');
+      const paymentRespHeader = res.headers.get('payment-response') || res.headers.get('x-payment-response');
       let receipt: PaymentReceipt | undefined;
       if (paymentRespHeader) {
         try {
