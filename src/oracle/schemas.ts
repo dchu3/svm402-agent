@@ -10,7 +10,8 @@ export const ReportResponseSchema = z
         level: z.string(),
         flags: z.array(z.string()),
       })
-      .passthrough(),
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
