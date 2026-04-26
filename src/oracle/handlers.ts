@@ -1,9 +1,6 @@
 import { z } from 'zod';
 import type { OracleClient } from './client.js';
 import {
-  MarketResponseSchema,
-  HoneypotResponseSchema,
-  ForensicsResponseSchema,
   ReportResponseSchema,
 } from './schemas.js';
 import { debug } from '../util/log.js';
@@ -11,10 +8,7 @@ import { debug } from '../util/log.js';
 const ADDRESS_REGEX = /^0x[0-9a-fA-F]{40}$/i;
 
 export const TOOL_PRICES_USD: Record<string, number> = {
-  get_market: 0.005,
-  get_honeypot: 0.01,
-  get_forensics: 0.02,
-  get_report: 0.03,
+  get_report: 0.01,
 };
 
 export interface SpendTracker {
@@ -84,33 +78,6 @@ export const handlers: Record<
   string,
   (args: Record<string, unknown>, deps: HandlerDeps) => Promise<ToolCallResult>
 > = {
-  async get_market(args, deps) {
-    const addr = validateAddress(args.address);
-    if (!addr) return { ok: false, error: 'invalid_address' };
-    return runPaid(
-      deps,
-      'get_market',
-      `/api/v1/x402/base/token/${addr}/market`,
-      MarketResponseSchema,
-    );
-  },
-  async get_honeypot(args, deps) {
-    const addr = validateAddress(args.address);
-    if (!addr) return { ok: false, error: 'invalid_address' };
-    return runPaid(
-      deps,
-      'get_honeypot',
-      `/api/v1/x402/base/token/${addr}/honeypot`,
-      HoneypotResponseSchema,
-    );
-  },
-  async get_forensics(args, deps) {
-    const addr = validateAddress(args.address);
-    if (!addr) return { ok: false, error: 'invalid_address' };
-    const pair = typeof args.pair === 'string' && ADDRESS_REGEX.test(args.pair) ? args.pair : null;
-    const path = `/api/v1/x402/base/token/${addr}/forensics${pair ? `?pair=${pair}` : ''}`;
-    return runPaid(deps, 'get_forensics', path, ForensicsResponseSchema);
-  },
   async get_report(args, deps) {
     const addr = validateAddress(args.address);
     if (!addr) return { ok: false, error: 'invalid_address' };

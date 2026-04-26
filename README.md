@@ -2,7 +2,7 @@
 
 > Gemini-driven CLI agent that exercises the [base-token-oracle](https://github.com/dchu3/base-token-oracle) x402 payment flow against Base mainnet.
 
-A small interactive REPL where you chat in natural language about Base ERC-20 tokens. Gemini decides which oracle endpoint to call (`/market`, `/honeypot`, `/forensics`, `/report`), and the client signs a real USDC `transferWithAuthorization` per call via x402 v2.
+A small interactive REPL where you chat in natural language about Base ERC-20 tokens. Gemini decides which oracle endpoint to call (`/report`), and the client signs a real USDC `transferWithAuthorization` per call via x402 v2.
 
 > **⚠️ Real money.** Every successful tool call settles real USDC on Base mainnet (chainId 8453). Use the `MAX_SPEND_USDC` cap.
 
@@ -30,7 +30,7 @@ Example session:
 ```
 ╭──────────────────────────────── 0xAbCd…1234 ╮
 │ svm402-agent                                │
-│ Gemini × x402 client for base-token-oracle  │
+│ Gemini × x402 client for /report endpoint        │
 │ ⚠  signs REAL USDC payments on Base (8453)  │
 │                                             │
 │ oracle    https://svm402.com                │
@@ -43,13 +43,13 @@ Example session:
 
 [$0.0000 / $0.100 • 0 calls] svm402❯ Is 0x4200000000000000000000000000000000000006 safe?
 ⚡ get_report(0x4200…0006) … signing & settling on Base
-✓ get_report  →  risk 0/10 · clean  •  $0.030 USDC  •  tx 0xabc123…def4
+✓ get_report  →  risk 0/10 · clean  •  $0.010 USDC  •  tx 0xabc123…def4
 🤖  WETH on Base looks clean — risk score 0/10. Liquidity ~$8.4M…
 
-[$0.0300 / $0.100 • 1 call] svm402❯ /spend
-session spend  ███████░░░░░░░░░░░░░░░░░  $0.0300 / $0.100  (30%)
+[$0.0100 / $0.100 • 1 call] svm402❯ /spend
+session spend  ██░░░░░░░░░░░░░░░░░░░░░░  $0.0100 / $0.100  (10%)
 
-[$0.0300 / $0.100 • 1 call] svm402❯ /quit
+[$0.0100 / $0.100 • 1 call] svm402❯ /quit
 bye.
 ```
 
@@ -78,7 +78,7 @@ You only need a few cents of USDC on Base. Easiest paths:
 - Buy USDC directly on Base (most CEXes support Base withdrawals).
 - For the agent's wallet address: launch the app once, copy the address from the banner, then send USDC to it.
 
-`/report` (the most expensive tool) costs $0.03 USDC. The default session cap of $0.10 lets you run a few real calls before the safety rail trips.
+`/report` (the primary tool) costs $0.01 USDC. The default session cap of $0.10 lets you run several real calls before the safety rail trips.
 
 ## Slash commands
 

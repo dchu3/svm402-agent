@@ -3,9 +3,9 @@ import { TOOL_DECLARATIONS } from '../src/oracle/tools.js';
 import { TOOL_PRICES_USD } from '../src/oracle/handlers.js';
 
 describe('TOOL_DECLARATIONS', () => {
-  it('declares the four expected tools', () => {
+  it('declares only get_report', () => {
     const names = TOOL_DECLARATIONS.map((d) => d.name).sort();
-    expect(names).toEqual(['get_forensics', 'get_honeypot', 'get_market', 'get_report']);
+    expect(names).toEqual(['get_report']);
   });
 
   it('every tool requires an address parameter', () => {
