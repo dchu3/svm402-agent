@@ -57,7 +57,8 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
     let statusMessagePromise: Promise<number> | undefined;
 
     const onToolStart = async (ev: ToolCallEvent) => {
-      statusMessagePromise = ctx.reply(`🔍 Analyzing with ${ev.name}...\n⚡ Signing & settling payment on Base...`).then((m) => m.message_id);
+      const statusText = `🔍 Analyzing with ${ev.name}...\n⚡ Signing & settling payment on Base...`;
+      statusMessagePromise = ctx.reply(statusText).then((m) => m.message_id);
     };
 
     const onToolEnd = async (ev: ToolEndEvent) => {
@@ -71,12 +72,16 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
             text += `\n⛓ Tx: ${shortHash}`;
           }
         }
-        await ctx.telegram.editMessageText(
-          ctx.chat.id,
-          messageId,
-          undefined,
-          text,
-        );
+        try {
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            messageId,
+            undefined,
+            text,
+          );
+        } catch (err) {
+          debug('telegram-edit-error', err);
+        }
       }
     };
 
