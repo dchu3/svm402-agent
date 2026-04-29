@@ -4,6 +4,7 @@ import { createOracleClient } from './oracle/client.js';
 import { createSpendTracker } from './oracle/handlers.js';
 import { createAgent } from './agent.js';
 import { startRepl } from './repl.js';
+import { startTelegramBot } from './telegram.js';
 import { renderBanner } from './ui/banner.js';
 import { printError } from './ui/render.js';
 
@@ -26,6 +27,9 @@ async function main(): Promise<void> {
     printError('MAX_SPEND_USDC must be a positive number.');
     process.exit(1);
   }
+
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramAllowedUser = process.env.TELEGRAM_ALLOWED_USER_ID;
 
   const wallet = createWallet(privateKey);
   const oracle = createOracleClient({ baseUrl: oracleUrl, wallet });
@@ -52,7 +56,20 @@ async function main(): Promise<void> {
     }),
   );
 
-  await startRepl({ agent, oracle, wallet, spend });
+  if (telegramToken && telegramAllowedUser) {
+    const allowedUserId = Number(telegramAllowedUser);
+    if (isNaN(allowedUserId)) {
+      printError('TELEGRAM_ALLOWED_USER_ID must be a number.');
+      process.exit(1);
+    }
+    await startTelegramBot({
+      agent,
+      token: telegramToken,
+      allowedUserId,
+    });
+  } else {
+    await startRepl({ agent, oracle, wallet, spend });
+  }
 }
 
 main().catch((err) => {
