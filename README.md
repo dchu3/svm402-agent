@@ -1,10 +1,57 @@
 # svm402-agent
 
-> Gemini-driven CLI agent that exercises the [base-token-oracle](https://github.com/dchu3/base-token-oracle) x402 payment flow against Base mainnet.
+> Gemini-driven agent that exercises the [base-token-oracle](https://github.com/dchu3/base-token-oracle) x402 payment flow against Base mainnet via CLI or Telegram.
 
-A small interactive REPL where you chat in natural language about Base ERC-20 tokens. Gemini decides which oracle endpoint to call (`/report`), and the client signs a real USDC `transferWithAuthorization` per call via x402 v2.
+An interactive agent where you chat in natural language about Base ERC-20 tokens. Gemini decides which oracle endpoint to call (`/report`), and the client signs a real USDC `transferWithAuthorization` per call via x402 v2.
 
 > **⚠️ Real money.** Every successful tool call settles real USDC on Base mainnet (chainId 8453). Use the `MAX_SPEND_USDC` cap.
+
+## Features
+
+- **CLI REPL:** Rich terminal interface with spinners, tables, and a real-time spend bar.
+- **Telegram Bot:** A private, authenticated bot interface to chat with the agent on the go.
+- **x402 Payments:** Automatic signing and settlement of micro-payments for oracle reports.
+- **Gemini Powered:** Natural language analysis of token safety, risk scores, and market data.
+
+## Quick start
+
+```bash
+git clone <this repo>
+cd svm402-agent
+cp .env.example .env
+# edit .env — set PRIVATE_KEY, GEMINI_API_KEY, ORACLE_URL
+# Optional: set TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USER_ID to use the bot
+npm install
+npm run build
+npm start
+```
+
+## Telegram Bot
+
+The agent includes a built-in Telegram bot. To enable it:
+1. Create a bot via [@BotFather](https://t.me/botfather) and get the `TELEGRAM_BOT_TOKEN`.
+2. Get your numeric Telegram User ID (e.g. via [@userinfobot](https://t.me/userinfobot)).
+3. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID` in your `.env`.
+4. Run `npm start`. If the token is present, the agent launches the bot instead of the REPL.
+
+The bot is **strictly private** and will only respond to the authorized user ID.
+
+## Configuration
+
+| Var | Required | Default | Notes |
+|---|---|---|---|
+| `ORACLE_URL` | no | `https://svm402.com` | Base URL of a running base-token-oracle |
+| `PRIVATE_KEY` | **yes** | — | 0x-prefixed 32-byte hex; wallet must hold USDC on Base |
+| `GEMINI_API_KEY` | **yes** | — | from [aistudio.google.com](https://aistudio.google.com/app/apikey) |
+| `TELEGRAM_BOT_TOKEN` | no | — | Telegram Bot API token |
+| `TELEGRAM_ALLOWED_USER_ID` | no | — | Numeric ID of the authorized Telegram user |
+| `GEMINI_MODEL` | no | `gemini-3.1-flash-lite-preview` | preview model; also fine: `gemini-2.5-flash`, `gemini-2.5-pro` |
+| `MAX_SPEND_USDC` | no | `0.10` | Hard cap on cumulative session spend |
+| `DEBUG` | no | `0` | `1` for verbose logs |
+| `NO_COLOR` | no | unset | Standard env var; disables all colors when set |
+| `SVM402_ASCII` | no | `0` | `1` falls back to plain ASCII glyphs/borders (for picky terminals) |
+| `SVM402_PROMPT` | no | `rich` | `plain` falls back to `svm402> ` prompt |
+| `SVM402_NO_SPINNER` | no | `0` | `1` disables in-flight spinners (useful when piping output) |
 
 ## What it does
 
