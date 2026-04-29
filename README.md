@@ -28,11 +28,17 @@ npm start
 
 ## Telegram Bot
 
-The agent includes a built-in Telegram bot. To enable it:
+The agent includes a built-in Telegram bot providing a polished mobile experience. To enable it:
 1. Create a bot via [@BotFather](https://t.me/botfather) and get the `TELEGRAM_BOT_TOKEN`.
 2. Get your numeric Telegram User ID (e.g. via [@userinfobot](https://t.me/userinfobot)).
 3. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_ID` in your `.env`.
 4. Run `npm start`. If the token is present, the agent launches the bot instead of the REPL.
+
+### Features
+- **Structured Reports:** Clear, emoji-rich token safety summaries designed for mobile readability.
+- **Real-time Feedback:** Live status updates for tool calls (signing, settling, and analysis).
+- **Private Access:** Strictly authenticated to your specific User ID.
+- **History Management:** `/clear` command to reset the agent's conversation memory.
 
 The bot is **strictly private** and will only respond to the authorized user ID.
 

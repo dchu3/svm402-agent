@@ -1,6 +1,6 @@
 import { Telegraf } from 'telegraf';
 import { message } from 'telegraf/filters';
-import type { Agent } from './agent.js';
+import type { Agent, ToolCallEvent, ToolEndEvent } from './agent.js';
 import { debug } from './util/log.js';
 
 export interface TelegramBotDeps {
@@ -27,24 +27,26 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
 
   bot.start(async (ctx) => {
     await ctx.reply(
-      'Welcome to svm402 Telegram Bot!\n\n' +
-      'I can help you analyze ERC-20 tokens on Base mainnet.\n' +
-      'Send me a token address to get started.\n\n' +
-      'Commands:\n' +
-      '/clear - Reset chat history\n' +
-      '/help - Show help message'
+      '🤖 Welcome to svm402 Telegram Bot!\n\n' +
+      'I am an AI agent that analyzes ERC-20 tokens on Base mainnet for security risks. 🛡️\n\n' +
+      '📍 Send me a 0x-prefixed token address to get started.\n\n' +
+      '💡 COMMANDS:\n' +
+      '🔹 /clear - Reset chat history\n' +
+      '🔹 /help - Show help message'
     );
   });
 
   bot.command('clear', async (ctx) => {
     deps.agent.reset();
-    await ctx.reply('Chat history cleared.');
+    await ctx.reply('🧹 Chat history cleared.');
   });
 
   bot.command('help', async (ctx) => {
     await ctx.reply(
-      'Send a 0x-prefixed token address to get a safety report.\n' +
-      'Example: `0x...` (Base mainnet only)'
+      '📖 HOW TO USE:\n' +
+      'Just send a 0x-prefixed token address (Base mainnet only) and I will perform a security audit.\n\n' +
+      'Example:\n' +
+      '0x4200000000000000000000000000000000000006'
     );
   });
 
@@ -54,19 +56,32 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
 
     let statusMessagePromise: Promise<number> | undefined;
 
-    const onToolStart = async (ev: { name: string }) => {
-      statusMessagePromise = ctx.reply(`🔍 Calling ${ev.name}...`).then((m) => m.message_id);
+    const onToolStart = async (ev: ToolCallEvent) => {
+      const statusText = `🔍 Analyzing with ${ev.name}...\n⚡ Signing & settling payment on Base...`;
+      statusMessagePromise = ctx.reply(statusText).then((m) => m.message_id);
     };
 
-    const onToolEnd = async (ev: { name: string; result: { ok: boolean } }) => {
+    const onToolEnd = async (ev: ToolEndEvent) => {
       if (statusMessagePromise) {
         const messageId = await statusMessagePromise;
-        await ctx.telegram.editMessageText(
-          ctx.chat.id,
-          messageId,
-          undefined,
-          ev.result.ok ? `✅ ${ev.name} completed.` : `❌ ${ev.name} failed.`,
-        );
+        let text = ev.result.ok ? `✅ ${ev.name} completed.` : `❌ ${ev.name} failed.`;
+        if (ev.result.ok && ev.receipt) {
+          text += `\n💸 Paid $${ev.priceUsd.toFixed(2)} USDC`;
+          if (ev.receipt.transaction) {
+            const shortHash = `${ev.receipt.transaction.slice(0, 6)}...${ev.receipt.transaction.slice(-4)}`;
+            text += `\n⛓ Tx: ${shortHash}`;
+          }
+        }
+        try {
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            messageId,
+            undefined,
+            text,
+          );
+        } catch (err) {
+          debug('telegram-edit-error', err);
+        }
       }
     };
 
