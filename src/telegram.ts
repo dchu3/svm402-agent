@@ -22,7 +22,7 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
       }
       return;
     }
-    return next();
+    return await next();
   });
 
   bot.start(async (ctx) => {
@@ -52,20 +52,20 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
     const text = ctx.message.text.trim();
     if (text.startsWith('/')) return;
 
-    let statusMessageId: number | undefined;
+    let statusMessagePromise: Promise<number> | undefined;
 
     const onToolStart = async (ev: { name: string }) => {
-      const msg = await ctx.reply(`🔍 Calling ${ev.name}...`);
-      statusMessageId = msg.message_id;
+      statusMessagePromise = ctx.reply(`🔍 Calling ${ev.name}...`).then((m) => m.message_id);
     };
 
     const onToolEnd = async (ev: { name: string; result: { ok: boolean } }) => {
-      if (statusMessageId) {
+      if (statusMessagePromise) {
+        const messageId = await statusMessagePromise;
         await ctx.telegram.editMessageText(
           ctx.chat.id,
-          statusMessageId,
+          messageId,
           undefined,
-          ev.result.ok ? `✅ ${ev.name} completed.` : `❌ ${ev.name} failed.`
+          ev.result.ok ? `✅ ${ev.name} completed.` : `❌ ${ev.name} failed.`,
         );
       }
     };
