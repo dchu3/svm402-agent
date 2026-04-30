@@ -66,6 +66,9 @@ async function main(): Promise<void> {
       agent,
       token: telegramToken,
       allowedUserId,
+      oracle,
+      wallet,
+      spend,
     });
   } else {
     await startRepl({ agent, oracle, wallet, spend });
