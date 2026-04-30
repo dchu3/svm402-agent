@@ -36,6 +36,7 @@ The agent includes a built-in Telegram bot providing a polished mobile experienc
 
 ### Features
 - **Structured Reports:** Clear, emoji-rich token safety summaries designed for mobile readability.
+- **Command Menu:** Access common tasks (`/balance`, `/spend`, `/receipts`, etc.) via the bot's menu button.
 - **Real-time Feedback:** Live status updates for tool calls (signing, settling, and analysis).
 - **Private Access:** Strictly authenticated to your specific User ID.
 - **History Management:** `/clear` command to reset the agent's conversation memory.

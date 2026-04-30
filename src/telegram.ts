@@ -2,11 +2,17 @@ import { Telegraf } from 'telegraf';
 import { message } from 'telegraf/filters';
 import type { Agent, ToolCallEvent, ToolEndEvent } from './agent.js';
 import { debug } from './util/log.js';
+import type { Wallet } from './wallet.js';
+import type { OracleClient } from './oracle/client.js';
+import type { SpendTracker } from './oracle/handlers.js';
 
 export interface TelegramBotDeps {
   agent: Agent;
   token: string;
   allowedUserId: number;
+  wallet: Wallet;
+  spend: SpendTracker;
+  oracle: OracleClient;
 }
 
 export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
@@ -31,8 +37,12 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
       'I am an AI agent that analyzes ERC-20 tokens on Base mainnet for security risks. 🛡️\n\n' +
       '📍 Send me a 0x-prefixed token address to get started.\n\n' +
       '💡 COMMANDS:\n' +
+      '🔹 /balance - Show wallet balance\n' +
+      '🔹 /spend - Show session spend\n' +
+      '🔹 /receipts - Show payment receipts\n' +
       '🔹 /clear - Reset chat history\n' +
-      '🔹 /help - Show help message'
+      '🔹 /help - Show help message',
+      { parse_mode: 'Markdown' }
     );
   });
 
@@ -41,12 +51,69 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
     await ctx.reply('🧹 Chat history cleared.');
   });
 
+  bot.command('balance', async (ctx) => {
+    try {
+      const { formatted } = await deps.wallet.usdcBalance();
+      await ctx.reply(
+        `💰 *Wallet Balance*\n\n` +
+        `📍 *Address:* \`${deps.wallet.address}\`\n` +
+        `⛓ *Network:* Base Mainnet\n` +
+        `💵 *USDC:* \`${formatted}\``,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (err) {
+      await ctx.reply(`❌ Balance lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
+  bot.command('spend', async (ctx) => {
+    const total = deps.spend.total;
+    const cap = deps.spend.cap;
+    const ratio = cap > 0 ? (total / cap) * 100 : 0;
+    await ctx.reply(
+      `📊 *Session Spend*\n\n` +
+      `💸 *Used:* \`$${total.toFixed(4)}\` USDC\n` +
+      `🛡 *Cap:* \`$${cap.toFixed(3)}\` USDC\n` +
+      `📈 *Progress:* \`${ratio.toFixed(1)}%\``,
+      { parse_mode: 'Markdown' }
+    );
+  });
+
+  bot.command('receipts', async (ctx) => {
+    const receipts = deps.oracle.receipts;
+    if (receipts.length === 0) {
+      await ctx.reply('🧾 No receipts yet in this session.');
+      return;
+    }
+
+    let total = 0;
+    const USDC_DECIMALS = 1_000_000;
+    const list = receipts.slice(-10).map((r, i) => {
+      const amount = Number(r.amountAtomic) / USDC_DECIMALS;
+      if (r.success) total += amount;
+      const status = r.success ? '✅' : '❌';
+      return `${status} \`$${amount.toFixed(4)}\` - ${r.endpoint}`;
+    }).join('\n');
+
+    await ctx.reply(
+      `🧾 *Recent Receipts* (last 10)\n\n` +
+      `${list}\n\n` +
+      `💰 *Total Spent:* \`$${total.toFixed(4)}\` USDC`,
+      { parse_mode: 'Markdown' }
+    );
+  });
+
   bot.command('help', async (ctx) => {
     await ctx.reply(
-      '📖 HOW TO USE:\n' +
+      '📖 *HOW TO USE:*\n' +
       'Just send a 0x-prefixed token address (Base mainnet only) and I will perform a security audit.\n\n' +
-      'Example:\n' +
-      '0x4200000000000000000000000000000000000006'
+      '💡 *COMMANDS:*\n' +
+      '🔹 /balance - Wallet address + USDC balance\n' +
+      '🔹 /spend - Session spend vs cap\n' +
+      '🔹 /receipts - List settled payments\n' +
+      '🔹 /clear - Reset chat history\n' +
+      '🔹 /help - Show this message',
+      { parse_mode: 'Markdown' }
     );
   });
 
@@ -96,6 +163,14 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
       await ctx.reply(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   });
+
+  await bot.telegram.setMyCommands([
+    { command: 'balance', description: 'Show wallet balance' },
+    { command: 'spend', description: 'Show session spend' },
+    { command: 'receipts', description: 'Show payment receipts' },
+    { command: 'clear', description: 'Reset chat history' },
+    { command: 'help', description: 'Show help message' },
+  ]);
 
   bot.launch();
   console.log('Telegram bot is running...');
