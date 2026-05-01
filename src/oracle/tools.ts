@@ -4,7 +4,7 @@ export const TOOL_DECLARATIONS: FunctionDeclaration[] = [
   {
     name: 'get_report',
     description:
-      'Fetch a comprehensive Token report for a Base mainnet ERC-20 token (including optional risk score and flags). Best single tool for "is this token safe?". Costs $0.01 USDC.',
+      'Fetch a comprehensive token report for a Base mainnet ERC-20 token, including token metadata, deployer info, holder count, and top-10 concentration. Best single tool for "what do we know about this token?". Costs $0.01 USDC.',
     parameters: {
       type: Type.OBJECT,
       properties: {

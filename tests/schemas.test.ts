@@ -30,28 +30,15 @@ const FIXTURE = {
   top10_concentration_pct: 34.12,
   deployer_holdings_pct: 0,
   lp_locked_heuristic: null,
-  risk_score: 0,
-  risk_level: 'clean',
-  flags: [],
-  risk_components: [],
-  risk_mitigants: [],
-  risk_coverage: { evaluated: 4, total: 8, missing: ['honeypot_detected', 'high_tax', 'low_liquidity', 'new_pair'] },
-  risk_confidence: 'medium',
 };
 
 describe('ReportResponseSchema', () => {
   it('parses the README /report fixture with all top-level fields preserved', () => {
     const parsed = ReportResponseSchema.parse(FIXTURE);
-    expect(parsed.risk_score).toBe(0);
-    expect(parsed.risk_level).toBe('clean');
-    expect(parsed.risk_confidence).toBe('medium');
     expect(parsed.holder_count).toBe(312104);
     expect(parsed.top10_concentration_pct).toBe(34.12);
     expect(parsed.deployer_holdings_pct).toBe(0);
     expect(parsed.lp_locked_heuristic).toBeNull();
-    expect(parsed.flags).toEqual([]);
-    expect(parsed.risk_coverage?.evaluated).toBe(4);
-    expect(parsed.risk_coverage?.missing).toContain('honeypot_detected');
     expect(parsed.token?.symbol).toBe('WETH');
     expect(parsed.token?.verified).toBe(true);
     expect(parsed.deployer?.tx_count).toBe(12);
@@ -64,8 +51,8 @@ describe('ReportResponseSchema', () => {
       chain: 'base',
     });
     expect(parsed.address).toBe('0x4200000000000000000000000000000000000006');
-    expect(parsed.risk_score).toBeUndefined();
     expect(parsed.token).toBeUndefined();
+    expect(parsed.holder_count).toBeUndefined();
   });
 
   it('passes through unknown top-level fields without dropping them', () => {
@@ -76,23 +63,19 @@ describe('ReportResponseSchema', () => {
     expect(parsed.future_field).toEqual({ hello: 'world' });
   });
 
-  it('tolerates null for nested objects (deployer/token/token_activity/risk_coverage)', () => {
+  it('tolerates null for nested objects (deployer/token/token_activity)', () => {
     const parsed = ReportResponseSchema.parse({
       address: '0x16332535e2c27da578bc2e82beb09ce9d3c8eb07',
       chain: 'base',
       token: null,
       deployer: null,
       token_activity: null,
-      risk_coverage: null,
-      risk_score: 3,
-      risk_level: 'caution',
-      flags: ['unverified_contract'],
+      holder_count: null,
     });
     expect(parsed.deployer).toBeNull();
     expect(parsed.token).toBeNull();
     expect(parsed.token_activity).toBeNull();
-    expect(parsed.risk_coverage).toBeNull();
-    expect(parsed.risk_score).toBe(3);
+    expect(parsed.holder_count).toBeNull();
   });
 
   it('passes through unknown nested fields on token / deployer', () => {

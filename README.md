@@ -11,7 +11,7 @@ An interactive agent where you chat in natural language about Base ERC-20 tokens
 - **CLI REPL:** Rich terminal interface with spinners, tables, and a real-time spend bar.
 - **Telegram Bot:** A private, authenticated bot interface to chat with the agent on the go.
 - **x402 Payments:** Automatic signing and settlement of micro-payments for oracle reports.
-- **Gemini Powered:** Natural language analysis of token safety, risk scores, and market data.
+- **Gemini Powered:** Natural language analysis of token metadata, holders, and concentration data.
 
 ## Quick start
 
@@ -95,10 +95,10 @@ Example session:
 ╰─────────────────────────────────────────────╯
   Type /help for commands. Ctrl-C or /quit to exit.
 
-[$0.0000 / $0.100 • 0 calls] svm402❯ Is 0x4200000000000000000000000000000000000006 safe?
+[$0.0000 / $0.100 • 0 calls] svm402❯ Tell me about 0x4200000000000000000000000000000000000006
 ⚡ get_report(0x4200…0006) … signing & settling on Base
-✓ get_report  →  risk 0/10 · clean  •  $0.010 USDC  •  tx 0xabc123…def4
-🤖  WETH on Base looks clean — risk score 0/10. Liquidity ~$8.4M…
+✓ get_report  →  top-10 4.2% · 312,104 holders  •  $0.010 USDC  •  tx 0xabc123…def4
+🤖  WETH on Base — verified ERC-20, 312,104 holders, top-10 concentration 4.2%…
 
 [$0.0100 / $0.100 • 1 call] svm402❯ /spend
 session spend  ██░░░░░░░░░░░░░░░░░░░░░░  $0.0100 / $0.100  (10%)
