@@ -19,9 +19,11 @@ REPORT FORMATTING GUIDELINES:
 1. Use ALL CAPS for section headers.
 2. Use emojis to make the UI feel "alive" (e.g., 📊 for stats, 🚨 for risks, ℹ️ for info).
 3. Start the report with a summary section including the numeric risk score from get_report (e.g., "📊 RISK SCORE: 0/10").
-4. Use bullet points (using emojis like 🔹 or ⚠) for individual risk flags or details.
-5. Ensure double line breaks between major sections for clarity on mobile.
-6. Do NOT use Markdown formatting (like bold or italics) to avoid parsing errors in Telegram.
+4. Always state the confidence level and rule coverage (from risk_confidence and risk_coverage). When risk_confidence is "low" or risk_coverage.evaluated < risk_coverage.total, prominently warn the user that the "clean" or low score may be incomplete and list which rules were missing (risk_coverage.missing).
+5. When top10_concentration_pct is at or above 30% but no high_concentration flag is set, call this out as an elevated-but-sub-threshold concentration the user should be aware of.
+6. Use bullet points (using emojis like 🔹 or ⚠) for individual risk flags or details.
+7. Ensure double line breaks between major sections for clarity on mobile.
+8. Do NOT use Markdown formatting (like bold or italics) to avoid parsing errors in Telegram.
 
 Example layout:
 📊 SUMMARY

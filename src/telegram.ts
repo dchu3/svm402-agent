@@ -141,6 +141,7 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
                 top10_concentration_pct?: number | null;
                 holder_count?: number | null;
                 flags?: string[];
+                risk_coverage?: { evaluated?: number; total?: number; missing?: string[] } | null;
               }
             | undefined;
           if (data) {
@@ -150,8 +151,25 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
               if (data.risk_confidence) line += ` · confidence ${data.risk_confidence}`;
               text += line;
             }
+            const cov = data.risk_coverage ?? undefined;
+            const partial =
+              typeof cov?.evaluated === 'number' &&
+              typeof cov?.total === 'number' &&
+              cov.evaluated < cov.total;
+            if (data.risk_confidence === 'low' || partial) {
+              const detail =
+                cov && typeof cov.evaluated === 'number' && typeof cov.total === 'number'
+                  ? `${cov.evaluated}/${cov.total} rules evaluated`
+                  : 'partial rule coverage';
+              text += `\n⚠ Score may be incomplete: ${detail}. Treat "clean" with caution.`;
+            }
             if (typeof data.top10_concentration_pct === 'number') {
-              text += `\n📊 Top-10 holders: ${data.top10_concentration_pct.toFixed(1)}%`;
+              const elevated =
+                data.top10_concentration_pct >= 30 &&
+                !(data.flags ?? []).includes('high_concentration');
+              text += `\n📊 Top-10 holders: ${data.top10_concentration_pct.toFixed(1)}%${
+                elevated ? ' (elevated, below 70% rule threshold)' : ''
+              }`;
             }
             if (typeof data.holder_count === 'number') {
               text += `\n👥 Holders: ${data.holder_count.toLocaleString()}`;

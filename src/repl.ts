@@ -28,6 +28,8 @@ export interface ReplDeps {
   spend: SpendTracker;
 }
 
+const ELEVATED_TOP10_PCT = 30;
+
 function buildSummary(ev: ToolEndEvent): string | undefined {
   if (!ev.result.ok) return undefined;
   const data = ev.result.data as
@@ -38,6 +40,7 @@ function buildSummary(ev: ToolEndEvent): string | undefined {
         top10_concentration_pct?: number | null;
         holder_count?: number | null;
         flags?: string[];
+        risk_coverage?: { evaluated?: number; total?: number } | null;
       }
     | undefined;
   if (!data) return undefined;
@@ -50,10 +53,27 @@ function buildSummary(ev: ToolEndEvent): string | undefined {
     parts.push(head);
   }
   if (typeof data.top10_concentration_pct === 'number') {
-    parts.push(`top-10 ${data.top10_concentration_pct.toFixed(1)}%`);
+    const tag =
+      data.top10_concentration_pct >= ELEVATED_TOP10_PCT &&
+      !(data.flags ?? []).includes('high_concentration')
+        ? ' ⚠'
+        : '';
+    parts.push(`top-10 ${data.top10_concentration_pct.toFixed(1)}%${tag}`);
   }
   if (typeof data.holder_count === 'number') {
     parts.push(`${data.holder_count.toLocaleString()} holders`);
+  }
+  const cov = data.risk_coverage ?? undefined;
+  const partial =
+    typeof cov?.evaluated === 'number' &&
+    typeof cov?.total === 'number' &&
+    cov.evaluated < cov.total;
+  if (data.risk_confidence === 'low' || partial) {
+    if (cov && typeof cov.evaluated === 'number' && typeof cov.total === 'number') {
+      parts.push(`partial coverage ${cov.evaluated}/${cov.total}`);
+    } else {
+      parts.push('partial coverage');
+    }
   }
   if (parts.length === 0 && Array.isArray(data.flags) && data.flags.length > 0) {
     parts.push(`${data.flags.length} flag${data.flags.length === 1 ? '' : 's'}`);
