@@ -88,4 +88,33 @@ describe('ReportResponseSchema', () => {
     expect((parsed.token as Record<string, unknown>).future_token_field).toBe(1);
     expect((parsed.deployer as Record<string, unknown>).future_deployer_field).toBe(true);
   });
+
+  it('tolerates null primitives inside deployer / token / token_activity', () => {
+    const parsed = ReportResponseSchema.parse({
+      address: '0x532f27101965dd16442e59d40670faf5ebb142e4',
+      chain: 'base',
+      token: {
+        name: null,
+        symbol: null,
+        decimals: null,
+        total_supply: null,
+        type: null,
+        verified: null,
+      },
+      deployer: {
+        address: '0x0',
+        is_contract: null,
+        tx_count: null,
+        coin_balance: null,
+      },
+      token_activity: {
+        last_active_timestamp: null,
+        recent_methods: null,
+      },
+    });
+    expect(parsed.deployer?.is_contract).toBeNull();
+    expect(parsed.deployer?.tx_count).toBeNull();
+    expect(parsed.token?.verified).toBeNull();
+    expect(parsed.token_activity?.recent_methods).toBeNull();
+  });
 });
