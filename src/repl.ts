@@ -30,24 +30,35 @@ export interface ReplDeps {
 
 function buildSummary(ev: ToolEndEvent): string | undefined {
   if (!ev.result.ok) return undefined;
-  const data = ev.result.data as Record<string, unknown> | undefined;
+  const data = ev.result.data as
+    | {
+        risk_score?: number;
+        risk_level?: string;
+        risk_confidence?: string;
+        top10_concentration_pct?: number | null;
+        holder_count?: number | null;
+        flags?: string[];
+      }
+    | undefined;
   if (!data) return undefined;
-  const risk = (data as { risk?: { score?: number; level?: string } }).risk;
-  if (risk && typeof risk.score === 'number') {
-    return `risk ${risk.score}/10${risk.level ? ' · ' + risk.level : ''}`;
+
+  const parts: string[] = [];
+  if (typeof data.risk_score === 'number') {
+    let head = `risk ${data.risk_score}/10`;
+    if (data.risk_level) head += ` · ${data.risk_level}`;
+    if (data.risk_confidence) head += ` · conf ${data.risk_confidence}`;
+    parts.push(head);
   }
-  if (typeof (data as { is_honeypot?: boolean }).is_honeypot === 'boolean') {
-    return (data as { is_honeypot: boolean }).is_honeypot ? 'honeypot detected' : 'not a honeypot';
+  if (typeof data.top10_concentration_pct === 'number') {
+    parts.push(`top-10 ${data.top10_concentration_pct.toFixed(1)}%`);
   }
-  if (typeof (data as { price_usd?: number }).price_usd === 'number') {
-    const p = (data as { price_usd: number }).price_usd;
-    return `price $${p.toLocaleString(undefined, { maximumFractionDigits: 6 })}`;
+  if (typeof data.holder_count === 'number') {
+    parts.push(`${data.holder_count.toLocaleString()} holders`);
   }
-  if (typeof (data as { holder_count?: number }).holder_count === 'number') {
-    const h = (data as { holder_count: number }).holder_count;
-    return `${h.toLocaleString()} holders`;
+  if (parts.length === 0 && Array.isArray(data.flags) && data.flags.length > 0) {
+    parts.push(`${data.flags.length} flag${data.flags.length === 1 ? '' : 's'}`);
   }
-  return undefined;
+  return parts.length > 0 ? parts.join(' · ') : undefined;
 }
 
 export async function startRepl(deps: ReplDeps): Promise<void> {
