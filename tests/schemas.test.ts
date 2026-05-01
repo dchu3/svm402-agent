@@ -76,6 +76,25 @@ describe('ReportResponseSchema', () => {
     expect(parsed.future_field).toEqual({ hello: 'world' });
   });
 
+  it('tolerates null for nested objects (deployer/token/token_activity/risk_coverage)', () => {
+    const parsed = ReportResponseSchema.parse({
+      address: '0x16332535e2c27da578bc2e82beb09ce9d3c8eb07',
+      chain: 'base',
+      token: null,
+      deployer: null,
+      token_activity: null,
+      risk_coverage: null,
+      risk_score: 3,
+      risk_level: 'caution',
+      flags: ['unverified_contract'],
+    });
+    expect(parsed.deployer).toBeNull();
+    expect(parsed.token).toBeNull();
+    expect(parsed.token_activity).toBeNull();
+    expect(parsed.risk_coverage).toBeNull();
+    expect(parsed.risk_score).toBe(3);
+  });
+
   it('passes through unknown nested fields on token / deployer', () => {
     const parsed = ReportResponseSchema.parse({
       address: '0x4200000000000000000000000000000000000006',

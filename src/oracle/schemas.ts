@@ -51,9 +51,9 @@ export const ReportResponseSchema = z
   .object({
     address: z.string(),
     chain: z.literal('base'),
-    token: TokenSchema.optional(),
-    deployer: DeployerSchema.optional(),
-    token_activity: TokenActivitySchema.optional(),
+    token: TokenSchema.nullable().optional(),
+    deployer: DeployerSchema.nullable().optional(),
+    token_activity: TokenActivitySchema.nullable().optional(),
     holder_count: z.number().nullable().optional(),
     top10_concentration_pct: z.number().nullable().optional(),
     deployer_holdings_pct: z.number().nullable().optional(),
@@ -63,7 +63,7 @@ export const ReportResponseSchema = z
     flags: z.array(z.string()).optional(),
     risk_components: z.array(RiskComponentSchema).optional(),
     risk_mitigants: z.array(z.string()).optional(),
-    risk_coverage: RiskCoverageSchema.optional(),
+    risk_coverage: RiskCoverageSchema.nullable().optional(),
     risk_confidence: z.string().optional(),
   })
   .passthrough();
