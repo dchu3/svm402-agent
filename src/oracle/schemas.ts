@@ -2,22 +2,22 @@ import { z } from 'zod';
 
 const TokenSchema = z
   .object({
-    name: z.string().optional(),
-    symbol: z.string().optional(),
-    decimals: z.number().optional(),
-    total_supply: z.string().optional(),
+    name: z.string().nullable().optional(),
+    symbol: z.string().nullable().optional(),
+    decimals: z.number().nullable().optional(),
+    total_supply: z.string().nullable().optional(),
     circulating_market_cap: z.string().nullable().optional(),
     exchange_rate: z.string().nullable().optional(),
-    type: z.string().optional(),
-    verified: z.boolean().optional(),
+    type: z.string().nullable().optional(),
+    verified: z.boolean().nullable().optional(),
   })
   .passthrough();
 
 const DeployerSchema = z
   .object({
-    address: z.string().optional(),
-    is_contract: z.boolean().optional(),
-    tx_count: z.number().optional(),
+    address: z.string().nullable().optional(),
+    is_contract: z.boolean().nullable().optional(),
+    tx_count: z.number().nullable().optional(),
     coin_balance: z.string().nullable().optional(),
     creation_tx_hash: z.string().nullable().optional(),
     last_active_timestamp: z.string().nullable().optional(),
@@ -27,7 +27,7 @@ const DeployerSchema = z
 const TokenActivitySchema = z
   .object({
     last_active_timestamp: z.string().nullable().optional(),
-    recent_methods: z.array(z.string()).optional(),
+    recent_methods: z.array(z.string()).nullable().optional(),
   })
   .passthrough();
 
