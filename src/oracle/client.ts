@@ -41,7 +41,21 @@ export function createOracleClient({ baseUrl, wallet }: OracleClientOptions): Or
         } as Parameters<typeof wallet.account.signTypedData>[0]),
     }),
   );
-  const payFetch = wrapFetchWithPayment(fetch, client);
+
+  // Monkey-patch to fix nesting bug in @x402/core where PaymentRequirements
+  // are nested under 'accepted' instead of being flattened into the root payload.
+  const originalCreate = client.createPaymentPayload.bind(client);
+  client.createPaymentPayload = (async (paymentRequired: any) => {
+    const result = await (originalCreate as any)(paymentRequired);
+    if (result.x402Version === 2 && result.accepted) {
+      const { accepted, ...rest } = result;
+      return { ...rest, ...accepted };
+    }
+    return result;
+  }) as any;
+
+  const disableX402 = process.env.DISABLE_X402 === '1' || process.env.DISABLE_X402 === 'true';
+  const payFetch = disableX402 ? fetch : wrapFetchWithPayment(fetch, client);
   const receipts: PaymentReceipt[] = [];
 
   return {
@@ -57,7 +71,7 @@ export function createOracleClient({ baseUrl, wallet }: OracleClientOptions): Or
       let receipt: PaymentReceipt | undefined;
       if (paymentRespHeader) {
         try {
-          const settle: SettleResponse = decodePaymentResponseHeader(paymentRespHeader);
+          const settle = decodePaymentResponseHeader(paymentRespHeader) as any;
           receipt = {
             endpoint: path,
             success: settle.success,
@@ -78,6 +92,17 @@ export function createOracleClient({ baseUrl, wallet }: OracleClientOptions): Or
       const text = await res.text();
       debug('Response text:', text);
       if (!res.ok) {
+        if (status === 402) {
+          const reqHeader = res.headers.get('payment-required') || res.headers.get('x-payment-required');
+          if (reqHeader) {
+            try {
+              const decoded = JSON.parse(Buffer.from(reqHeader, 'base64').toString());
+              debug('Payment required error:', decoded.error);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
         const snippet = text.slice(0, 500);
         throw new Error(`Oracle ${status} for ${path}: ${snippet}`);
       }
