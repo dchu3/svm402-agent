@@ -1,3 +1,4 @@
+import { getAddress } from 'viem';
 import { z } from 'zod';
 import type { OracleClient } from './client.js';
 import {
@@ -43,8 +44,12 @@ export interface ToolCallResult {
 }
 
 function validateAddress(addr: unknown): string | null {
-  if (typeof addr !== 'string') return null;
-  return ADDRESS_REGEX.test(addr) ? addr.toLowerCase() : null;
+  if (typeof addr !== 'string' || !ADDRESS_REGEX.test(addr)) return null;
+  try {
+    return getAddress(addr);
+  } catch {
+    return null;
+  }
 }
 
 async function runPaid<T>(
