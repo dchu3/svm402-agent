@@ -31,6 +31,29 @@ const TokenActivitySchema = z
   })
   .passthrough();
 
+export const HOLDER_CATEGORIES = [
+  'burn',
+  'bridge',
+  'deployer',
+  'contract',
+  'eoa',
+  'unknown',
+] as const;
+
+export const HolderCategorySchema = z.enum(HOLDER_CATEGORIES);
+export type HolderCategory = z.infer<typeof HolderCategorySchema>;
+
+const TopHolderSchema = z
+  .object({
+    address: z.string(),
+    value: z.string().nullable().optional(),
+    percent: z.number().nullable().optional(),
+    category: HolderCategorySchema,
+  })
+  .passthrough();
+
+export type TopHolder = z.infer<typeof TopHolderSchema>;
+
 export const ReportResponseSchema = z
   .object({
     address: z.string(),
@@ -40,8 +63,11 @@ export const ReportResponseSchema = z
     token_activity: TokenActivitySchema.nullable().optional(),
     holder_count: z.number().nullable().optional(),
     top10_concentration_pct: z.number().nullable().optional(),
+    circulating_top10_concentration_pct: z.number().nullable().optional(),
+    top_holders: z.array(TopHolderSchema).nullable().optional(),
     deployer_holdings_pct: z.number().nullable().optional(),
     lp_locked_heuristic: z.boolean().nullable().optional(),
+    flags: z.array(z.string()).nullable().optional(),
   })
   .passthrough();
 
