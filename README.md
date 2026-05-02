@@ -55,6 +55,7 @@ The bot is **strictly private** and will only respond to the authorized user ID.
 | `GEMINI_MODEL` | no | `gemini-3.1-flash-lite-preview` | preview model; also fine: `gemini-2.5-flash`, `gemini-2.5-pro` |
 | `MAX_SPEND_USDC` | no | `0.10` | Hard cap on cumulative session spend |
 | `DEBUG` | no | `0` | `1` for verbose logs |
+| `DISABLE_X402` | no | `0` | `1` disables x402 payment wrapper (useful with DEBUG=1) |
 | `NO_COLOR` | no | unset | Standard env var; disables all colors when set |
 | `SVM402_ASCII` | no | `0` | `1` falls back to plain ASCII glyphs/borders (for picky terminals) |
 | `SVM402_PROMPT` | no | `rich` | `plain` falls back to `svm402> ` prompt |
@@ -117,6 +118,7 @@ bye.
 | `GEMINI_MODEL` | no | `gemini-3.1-flash-lite-preview` | preview model; also fine: `gemini-2.5-flash`, `gemini-2.5-pro` |
 | `MAX_SPEND_USDC` | no | `0.10` | Hard cap on cumulative session spend |
 | `DEBUG` | no | `0` | `1` for verbose logs |
+| `DISABLE_X402` | no | `0` | `1` disables x402 payment wrapper (useful with DEBUG=1) |
 | `NO_COLOR` | no | unset | Standard env var; disables all colors when set |
 | `SVM402_ASCII` | no | `0` | `1` falls back to plain ASCII glyphs/borders (for picky terminals) |
 | `SVM402_PROMPT` | no | `rich` | `plain` falls back to `svm402> ` prompt |
