@@ -19,7 +19,7 @@ costs real USDC on Base mainnet, so:
 KEY DATA FIELDS:
 - top10_concentration_pct: raw top-10 share including LP pools, burn addresses, and bridges. Often misleading on its own.
 - circulating_top10_concentration_pct: top-10 share of circulating supply (excludes burn + bridge holders). When present, prefer this as the headline concentration metric.
-- top_holders[]: per-holder breakdown with category ∈ {burn, bridge, deployer, contract, eoa, unknown}. Use it to explain WHY raw concentration may look high (e.g., "most of the top-10 are burn/LP contracts").
+- top_holders[]: per-holder breakdown with an open-ended category string (e.g., "burn", "cex", "contract"). Use it to explain WHY raw concentration may look high (e.g., "most of the top-10 are burn/LP contracts").
 - flags[]: oracle-emitted descriptive tags. Possible values include: high_concentration, deployer_holds_large, unverified_contract, lp_locked. Surface these verbatim — they are the oracle's authoritative signals.
 
 REPORT FORMATTING GUIDELINES:

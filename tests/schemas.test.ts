@@ -66,7 +66,7 @@ describe('ReportResponseSchema', () => {
     expect(parsed.token_activity?.recent_methods).toEqual(['transfer', 'approve']);
   });
 
-  it('rejects an unknown holder category', () => {
+  it('accepts an unknown holder category', () => {
     const result = ReportResponseSchema.safeParse({
       address: '0x4200000000000000000000000000000000000006',
       chain: 'base',
@@ -74,7 +74,7 @@ describe('ReportResponseSchema', () => {
         { address: '0xabc', value: '1', percent: 1, category: 'whale' },
       ],
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it('tolerates null top_holders / circulating / flags', () => {
