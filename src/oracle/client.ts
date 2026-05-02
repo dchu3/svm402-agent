@@ -76,6 +76,7 @@ export function createOracleClient({ baseUrl, wallet }: OracleClientOptions): Or
         }
       }
       const text = await res.text();
+      debug('Response text:', text);
       if (!res.ok) {
         const snippet = text.slice(0, 500);
         throw new Error(`Oracle ${status} for ${path}: ${snippet}`);
