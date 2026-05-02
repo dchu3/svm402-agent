@@ -47,7 +47,7 @@ export function createOracleClient({ baseUrl, wallet }: OracleClientOptions): Or
   const originalCreate = client.createPaymentPayload.bind(client);
   client.createPaymentPayload = (async (paymentRequired: any) => {
     const result = await (originalCreate as any)(paymentRequired);
-    if (result.x402Version === 2 && result.accepted) {
+    if ((result.x402Version === 2 || (result.x402Version as any) === '2') && result.accepted) {
       const { accepted, ...rest } = result;
       return { ...rest, ...accepted };
     }
