@@ -31,16 +31,7 @@ const TokenActivitySchema = z
   })
   .passthrough();
 
-export const HOLDER_CATEGORIES = [
-  'burn',
-  'bridge',
-  'deployer',
-  'contract',
-  'eoa',
-  'unknown',
-] as const;
-
-export const HolderCategorySchema = z.enum(HOLDER_CATEGORIES);
+export const HolderCategorySchema = z.string();
 export type HolderCategory = z.infer<typeof HolderCategorySchema>;
 
 const TopHolderSchema = z

@@ -80,6 +80,9 @@ export function createOracleClient({ baseUrl, wallet }: OracleClientOptions): Or
         const snippet = text.slice(0, 500);
         throw new Error(`Oracle ${status} for ${path}: ${snippet}`);
       }
+      if (text.trim() === '') {
+        throw new Error(`Oracle returned an empty response for ${path}`);
+      }
       let data: T;
       try {
         data = JSON.parse(text) as T;
