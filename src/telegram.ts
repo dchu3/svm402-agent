@@ -136,18 +136,31 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
           const data = ev.result.data as
             | {
                 top10_concentration_pct?: number | null;
+                circulating_top10_concentration_pct?: number | null;
                 holder_count?: number | null;
+                flags?: string[] | null;
               }
             | undefined;
           if (data) {
-            if (typeof data.top10_concentration_pct === 'number') {
-              const elevated = data.top10_concentration_pct >= 30;
-              text += `\n📊 Top-10 holders: ${data.top10_concentration_pct.toFixed(1)}%${
-                elevated ? ' (elevated)' : ''
-              }`;
+            const raw = typeof data.top10_concentration_pct === 'number' ? data.top10_concentration_pct : null;
+            const circ =
+              typeof data.circulating_top10_concentration_pct === 'number'
+                ? data.circulating_top10_concentration_pct
+                : null;
+            const headline = circ ?? raw;
+            if (typeof headline === 'number') {
+              const elevated = headline >= 30;
+              const label = circ !== null ? 'Top-10 (circulating)' : 'Top-10';
+              text += `\n📊 ${label}: ${headline.toFixed(1)}%${elevated ? ' (elevated)' : ''}`;
+              if (circ !== null && raw !== null && Math.abs(raw - circ) >= 1) {
+                text += ` (raw: ${raw.toFixed(1)}%)`;
+              }
             }
             if (typeof data.holder_count === 'number') {
               text += `\n👥 Holders: ${data.holder_count.toLocaleString()}`;
+            }
+            if (Array.isArray(data.flags) && data.flags.length > 0) {
+              text += `\n⚠ Flags: ${data.flags.join(', ')}`;
             }
           }
           if (ev.receipt) {
