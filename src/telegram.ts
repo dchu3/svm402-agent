@@ -84,9 +84,9 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
       '',
       `${indicator} \`${bar}\` ${pct.toFixed(1)}%`,
       '',
-      `💸 *Used:*      \`$${total.toFixed(4)}\` USDC`,
-      `🪙 *Remaining:* \`$${remaining.toFixed(4)}\` USDC`,
-      `🛡 *Cap:*       \`$${cap.toFixed(4)}\` USDC`,
+      `💸 *Used:*      \`$${total.toFixed(2)}\` USDC`,
+      `🪙 *Remaining:* \`$${remaining.toFixed(2)}\` USDC`,
+      `🛡 *Cap:*       \`$${cap.toFixed(2)}\` USDC`,
     ];
     if (ratio >= 1) {
       lines.push('', '⚠️ Cap reached — raise `MAX_SPEND_USDC` to make more calls.');
