@@ -1,10 +1,13 @@
 export const USDC_DECIMALS = 6;
 
-function isIntegerAtomic(s: string): boolean {
+function isIntegerAtomic(val: any): boolean {
+  if (val === undefined || val === null) return false;
+  const s = String(val);
   return /^-?\d+$/.test(s);
 }
 
-function formatAtomicBigInt(atomic: string): string {
+function formatAtomicBigInt(val: any): string {
+  const atomic = String(val);
   const negative = atomic.startsWith('-');
   const digits = negative ? atomic.slice(1) : atomic;
   const padded = digits.padStart(USDC_DECIMALS + 1, '0');
@@ -14,13 +17,13 @@ function formatAtomicBigInt(atomic: string): string {
   return negative ? `-${body}` : body;
 }
 
-export function formatAtomicUsdc(atomic?: string | null): string {
+export function formatAtomicUsdc(atomic?: any): string {
   if (atomic === undefined || atomic === null || atomic === '') return '—';
   if (!isIntegerAtomic(atomic)) return '—';
   return formatAtomicBigInt(atomic);
 }
 
-export function parseAtomicUsdc(atomic?: string | null): number | undefined {
+export function parseAtomicUsdc(atomic?: any): number | undefined {
   if (atomic === undefined || atomic === null || atomic === '') return undefined;
   if (!isIntegerAtomic(atomic)) return undefined;
   const n = Number(atomic) / 10 ** USDC_DECIMALS;
