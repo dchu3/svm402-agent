@@ -134,6 +134,14 @@ export function createAgent(deps: AgentDeps): Agent {
             deps.oracle.receipts.length > receiptsBefore
               ? deps.oracle.receipts[deps.oracle.receipts.length - 1]
               : undefined;
+
+          if (newReceipt && !newReceipt.amountAtomic && result.ok) {
+            const price = TOOL_PRICES_USD[name];
+            if (price !== undefined) {
+              newReceipt.amountAtomic = String(Math.floor(price * 1_000_000));
+            }
+          }
+
           hooks?.onToolEnd?.({
             name,
             args,

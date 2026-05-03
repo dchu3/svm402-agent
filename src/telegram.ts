@@ -107,14 +107,14 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
       const amountNum = parseAtomicUsdc(r.amountAtomic);
       if (r.success && amountNum !== undefined) total += amountNum;
       const status = r.success ? '✅' : '❌';
-      const display = amountNum !== undefined ? `$${amountNum.toFixed(4)}` : formatAtomicUsdc(r.amountAtomic);
+      const display = amountNum !== undefined ? `$${amountNum.toFixed(2)}` : formatAtomicUsdc(r.amountAtomic);
       return `${status} \`${display}\` - ${r.endpoint}`;
     }).join('\n');
 
     await ctx.reply(
       `🧾 *Recent Receipts* (last 10)\n\n` +
       `${list}\n\n` +
-      `💰 *Total Spent:* \`$${total.toFixed(4)}\` USDC`,
+      `💰 *Total Spent:* \`$${total.toFixed(2)}\` USDC`,
       { parse_mode: 'Markdown' }
     );
   });
