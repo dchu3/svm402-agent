@@ -162,4 +162,125 @@ describe('ReportResponseSchema', () => {
     expect(parsed.token?.verified).toBeNull();
     expect(parsed.token_activity?.recent_methods).toBeNull();
   });
+
+  describe('contract block', () => {
+    const CLAWBANK = {
+      address: '0x16332535e2c27da578bc2e82beb09ce9d3c8eb07',
+      chain: 'base' as const,
+      token: {
+        name: 'ClawBank',
+        symbol: '$CLAWBANK',
+        decimals: 18,
+        total_supply: '100000000000000000000000000000',
+        circulating_market_cap: '0.0',
+        exchange_rate: '0.00003353',
+        type: 'ERC-20',
+        verified: true,
+      },
+      deployer: null,
+      token_activity: {
+        last_active_timestamp: '2026-05-03T11:06:13.000000Z',
+        recent_methods: ['approve', 'transfer'],
+      },
+      holder_count: 5525,
+      top10_concentration_pct: 43.87,
+      circulating_top10_concentration_pct: 43.87,
+      top_holders: [],
+      deployer_holdings_pct: null,
+      lp_locked_heuristic: null,
+      contract: {
+        verified: true,
+        language: 'solidity',
+        compiler_version: '0.8.28+commit.7893614a',
+        is_proxy: false,
+        proxy_type: null,
+        implementations: [],
+        traits: {
+          mintable: false,
+          pausable: false,
+          ownable: false,
+          blacklist: false,
+          fee_setter: false,
+          proxy_upgradeable: false,
+        },
+      },
+      flags: [],
+    };
+
+    it('parses the ClawBank fixture with a fully populated contract block', () => {
+      const parsed = ReportResponseSchema.parse(CLAWBANK);
+      expect(parsed.contract?.verified).toBe(true);
+      expect(parsed.contract?.language).toBe('solidity');
+      expect(parsed.contract?.compiler_version).toBe('0.8.28+commit.7893614a');
+      expect(parsed.contract?.is_proxy).toBe(false);
+      expect(parsed.contract?.proxy_type).toBeNull();
+      expect(parsed.contract?.implementations).toEqual([]);
+      expect(parsed.contract?.traits?.mintable).toBe(false);
+      expect(parsed.contract?.traits?.proxy_upgradeable).toBe(false);
+    });
+
+    it('tolerates a null contract block (unverified contract)', () => {
+      const parsed = ReportResponseSchema.parse({
+        address: '0x4200000000000000000000000000000000000006',
+        chain: 'base',
+        contract: null,
+      });
+      expect(parsed.contract).toBeNull();
+    });
+
+    it('accepts partial traits with null signals (no ABI)', () => {
+      const parsed = ReportResponseSchema.parse({
+        address: '0x4200000000000000000000000000000000000006',
+        chain: 'base',
+        contract: {
+          verified: false,
+          traits: {
+            mintable: null,
+            pausable: null,
+          },
+        },
+      });
+      expect(parsed.contract?.verified).toBe(false);
+      expect(parsed.contract?.traits?.mintable).toBeNull();
+      expect(parsed.contract?.traits?.pausable).toBeNull();
+      expect(parsed.contract?.traits?.ownable).toBeUndefined();
+    });
+
+    it('passes through unknown fields on contract and contract.traits', () => {
+      const parsed = ReportResponseSchema.parse({
+        address: '0x4200000000000000000000000000000000000006',
+        chain: 'base',
+        contract: {
+          verified: true,
+          future_contract_field: 'x',
+          traits: { mintable: true, future_trait: true },
+        },
+      });
+      const contract = parsed.contract as Record<string, unknown>;
+      expect(contract.future_contract_field).toBe('x');
+      const traits = contract.traits as Record<string, unknown>;
+      expect(traits.future_trait).toBe(true);
+    });
+
+    it('parses an implementation with a name', () => {
+      const parsed = ReportResponseSchema.parse({
+        address: '0x4200000000000000000000000000000000000006',
+        chain: 'base',
+        contract: {
+          verified: true,
+          is_proxy: true,
+          proxy_type: 'eip1967',
+          implementations: [
+            { address: '0xabcabcabcabcabcabcabcabcabcabcabcabcabca', name: 'TokenV2' },
+            { address: '0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddead', name: null },
+          ],
+          traits: { proxy_upgradeable: true },
+        },
+      });
+      expect(parsed.contract?.implementations?.length).toBe(2);
+      expect(parsed.contract?.implementations?.[0]?.name).toBe('TokenV2');
+      expect(parsed.contract?.implementations?.[1]?.name).toBeNull();
+      expect(parsed.contract?.traits?.proxy_upgradeable).toBe(true);
+    });
+  });
 });

@@ -20,7 +20,11 @@ KEY DATA FIELDS:
 - top10_concentration_pct: raw top-10 share including LP pools, burn addresses, and bridges. Often misleading on its own.
 - circulating_top10_concentration_pct: top-10 share of circulating supply (excludes burn + bridge holders). When present, prefer this as the headline concentration metric.
 - top_holders[]: per-holder breakdown with an open-ended category string (e.g., "burn", "cex", "contract"). Use it to explain WHY raw concentration may look high (e.g., "most of the top-10 are burn/LP contracts").
-- flags[]: oracle-emitted descriptive tags. Possible values include: high_concentration, deployer_holds_large, unverified_contract, lp_locked. Surface these verbatim — they are the oracle's authoritative signals.
+- contract: optional block (null when source is unverified or fetch failed). Fields:
+  - verified, language, compiler_version
+  - is_proxy, proxy_type, implementations[] ({address, name})
+  - traits: mintable, pausable, ownable, blacklist, fee_setter, proxy_upgradeable. Each is true / false / null. null means "no signal" (typically unverified contract) — do not treat null as false.
+- flags[]: oracle-emitted descriptive tags. Possible values include: high_concentration, deployer_holds_large, unverified_contract, lp_locked, mintable, pausable, proxy_upgradeable. Surface these verbatim — they are the oracle's authoritative signals.
 
 REPORT FORMATTING GUIDELINES:
 1. Use ALL CAPS for section headers.
@@ -28,9 +32,10 @@ REPORT FORMATTING GUIDELINES:
 3. Start the report with a short summary section covering token symbol/name and headline stats (holders, top-10 concentration, verified status). Prefer circulating_top10_concentration_pct over the raw figure when both are present, and note the raw value alongside it if they differ meaningfully.
 4. When the circulating top-10 (or raw top-10 if circulating is null) is at or above 30%, call this out as elevated holder concentration the user should be aware of.
 5. If flags[] is non-empty, include a SIGNALS section listing each flag.
-6. Use bullet points (using emojis like 🔹) for individual details.
-7. Ensure double line breaks between major sections for clarity on mobile.
-8. Do NOT use Markdown formatting (like bold or italics) to avoid parsing errors in Telegram.
+6. When the contract block is present, include a CONTRACT section: verified yes/no, language + compiler_version when known, proxy status (is_proxy / proxy_type / implementations), and any non-null traits. Mark write-traits (mintable, pausable, blacklist, fee_setter, proxy_upgradeable) that are true as concerning. Treat null traits as "unknown" (typical for unverified contracts) — never present them as false.
+7. Use bullet points (using emojis like 🔹) for individual details.
+8. Ensure double line breaks between major sections for clarity on mobile.
+9. Do NOT use Markdown formatting (like bold or italics) to avoid parsing errors in Telegram.
 
 Example layout:
 📊 SUMMARY
@@ -43,6 +48,11 @@ WETH (Wrapped Ether) — verified ERC-20
 
 ⚠ SIGNALS
 🔹 lp_locked
+
+🧱 CONTRACT
+🔹 Verified: yes (Solidity 0.8.28)
+🔹 Proxy: no
+🔹 Traits: mintable=false, pausable=false, ownable=false (others unknown)
 
 - Token addresses must be 0x-prefixed 40 hex chars on Base mainnet (chainId 8453).
 `.trim();
