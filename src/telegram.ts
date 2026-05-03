@@ -5,6 +5,7 @@ import { debug } from './util/log.js';
 import type { Wallet } from './wallet.js';
 import type { OracleClient } from './oracle/client.js';
 import type { SpendTracker } from './oracle/handlers.js';
+import { formatAtomicUsdc, parseAtomicUsdc } from './util/usdc.js';
 
 export interface TelegramBotDeps {
   agent: Agent;
@@ -87,12 +88,12 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
     }
 
     let total = 0;
-    const USDC_DECIMALS = 1_000_000;
-    const list = receipts.slice(-10).map((r, i) => {
-      const amount = Number(r.amountAtomic) / USDC_DECIMALS;
-      if (r.success) total += amount;
+    const list = receipts.slice(-10).map((r) => {
+      const amountNum = parseAtomicUsdc(r.amountAtomic);
+      if (r.success && amountNum !== undefined) total += amountNum;
       const status = r.success ? '✅' : '❌';
-      return `${status} \`$${amount.toFixed(4)}\` - ${r.endpoint}`;
+      const display = amountNum !== undefined ? `$${amountNum.toFixed(4)}` : formatAtomicUsdc(r.amountAtomic);
+      return `${status} \`${display}\` - ${r.endpoint}`;
     }).join('\n');
 
     await ctx.reply(

@@ -3,8 +3,7 @@ import Table from 'cli-table3';
 import { getTheme } from './theme.js';
 import { TOOL_PRICES_USD } from '../oracle/handlers.js';
 import type { PaymentReceipt } from '../oracle/client.js';
-
-const USDC_DECIMALS = 6;
+import { formatAtomicUsdc } from '../util/usdc.js';
 
 function termWidth(): number {
   return process.stdout.columns ?? 100;
@@ -20,17 +19,6 @@ function midTruncate(s: string, max: number): string {
 function shortTx(hash: string, max: number): string {
   if (!hash) return '—';
   return midTruncate(hash, max);
-}
-
-function formatAtomicUsdc(atomic?: string): string {
-  if (!atomic) return '—';
-  try {
-    const n = Number(atomic) / 10 ** USDC_DECIMALS;
-    if (!Number.isFinite(n)) return atomic;
-    return n.toFixed(USDC_DECIMALS).replace(/0+$/, '').replace(/\.$/, '');
-  } catch {
-    return atomic;
-  }
 }
 
 function tableChars(ascii: boolean): Record<string, string> {
