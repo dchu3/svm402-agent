@@ -5,6 +5,7 @@ import { debug } from './util/log.js';
 import type { Wallet } from './wallet.js';
 import type { OracleClient } from './oracle/client.js';
 import type { SpendTracker } from './oracle/handlers.js';
+import { formatAtomicUsdc, parseAtomicUsdc } from './util/usdc.js';
 
 export interface TelegramBotDeps {
   agent: Agent;
@@ -69,14 +70,29 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
   bot.command('spend', async (ctx) => {
     const total = deps.spend.total;
     const cap = deps.spend.cap;
-    const ratio = cap > 0 ? (total / cap) * 100 : 0;
-    await ctx.reply(
-      `📊 *Session Spend*\n\n` +
-      `💸 *Used:* \`$${total.toFixed(4)}\` USDC\n` +
-      `🛡 *Cap:* \`$${cap.toFixed(3)}\` USDC\n` +
-      `📈 *Progress:* \`${ratio.toFixed(1)}%\``,
-      { parse_mode: 'Markdown' }
-    );
+    const remaining = Math.max(0, cap - total);
+    const ratio = cap > 0 ? Math.min(1, Math.max(0, total / cap)) : 0;
+    const pct = ratio * 100;
+
+    const cells = 12;
+    const filled = Math.round(ratio * cells);
+    const bar = '▰'.repeat(filled) + '▱'.repeat(cells - filled);
+    const indicator = ratio >= 0.85 ? '🔴' : ratio >= 0.6 ? '🟡' : '🟢';
+
+    const lines = [
+      '📊 *Session Spend*',
+      '',
+      `${indicator} \`${bar}\` ${pct.toFixed(1)}%`,
+      '',
+      `💸 *Used:*      \`$${total.toFixed(2)}\` USDC`,
+      `🪙 *Remaining:* \`$${remaining.toFixed(2)}\` USDC`,
+      `🛡 *Cap:*       \`$${cap.toFixed(2)}\` USDC`,
+    ];
+    if (ratio >= 1) {
+      lines.push('', '⚠️ Cap reached — raise `MAX_SPEND_USDC` to make more calls.');
+    }
+
+    await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
   });
 
   bot.command('receipts', async (ctx) => {
@@ -87,12 +103,12 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
     }
 
     let total = 0;
-    const USDC_DECIMALS = 1_000_000;
-    const list = receipts.slice(-10).map((r, i) => {
-      const amount = Number(r.amountAtomic) / USDC_DECIMALS;
-      if (r.success) total += amount;
+    const list = receipts.slice(-10).map((r) => {
+      const amountNum = parseAtomicUsdc(r.amountAtomic);
+      if (r.success && amountNum !== undefined) total += amountNum;
       const status = r.success ? '✅' : '❌';
-      return `${status} \`$${amount.toFixed(4)}\` - ${r.endpoint}`;
+      const display = amountNum !== undefined ? `$${amountNum.toFixed(4)}` : formatAtomicUsdc(r.amountAtomic);
+      return `${status} \`${display}\` - ${r.endpoint}`;
     }).join('\n');
 
     await ctx.reply(
