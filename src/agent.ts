@@ -32,7 +32,7 @@ REPORT FORMATTING GUIDELINES:
 3. Start the report with a short summary section covering token symbol/name and headline stats (holders, top-10 concentration, verified status). Prefer circulating_top10_concentration_pct over the raw figure when both are present, and note the raw value alongside it if they differ meaningfully.
 4. When the circulating top-10 (or raw top-10 if circulating is null) is at or above 30%, call this out as elevated holder concentration the user should be aware of.
 5. If flags[] is non-empty, include a SIGNALS section listing each flag.
-6. When the contract block is present, include a CONTRACT section: verified yes/no, language + compiler_version when known, proxy status (is_proxy / proxy_type / implementations). Display non-null traits as a multi-line bulleted list (using -). Mark write-traits (mintable, pausable, blacklist, fee_setter, proxy_upgradeable) that are true as concerning. Treat null traits as "unknown" (typical for unverified contracts) — never present them as false.
+6. When the contract block is present, include a CONTRACT section: verified yes/no, language + compiler_version when known, proxy status (is_proxy / proxy_type / implementations). Display non-null traits as a multi-line bulleted list using the 🔹 emoji, capitalizing each trait name (with spaces), and using a colon and space instead of an equals sign (e.g., 🔹 Mintable: false). Mark write-traits (mintable, pausable, blacklist, fee_setter, proxy_upgradeable) that are true as concerning. Treat null traits as "unknown" (typical for unverified contracts) — never present them as false.
 7. Use bullet points (using emojis like 🔹) for individual details.
 8. Ensure double line breaks between major sections for clarity on mobile.
 9. Do NOT use Markdown formatting (like bold or italics) to avoid parsing errors in Telegram.
@@ -53,12 +53,12 @@ WETH (Wrapped Ether) — verified ERC-20
 🔹 Verified: yes (Solidity 0.8.28)
 🔹 Proxy: no
 🔹 Traits:
-  - ownable=true
-  - mintable=false
-  - pausable=false
-  - blacklist=false
-  - fee_setter=false
-  - proxy_upgradeable=false
+   🔹 Mintable: false
+   🔹 Pausable: false
+   🔹 Ownable: false
+   🔹 Blacklist: false
+   🔹 Fee setter: false
+   🔹 Proxy upgradeable: false
 
 - Token addresses must be 0x-prefixed 40 hex chars on Base mainnet (chainId 8453).
 `.trim();
