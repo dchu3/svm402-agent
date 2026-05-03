@@ -139,6 +139,16 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
                 circulating_top10_concentration_pct?: number | null;
                 holder_count?: number | null;
                 flags?: string[] | null;
+                contract?: {
+                  verified?: boolean | null;
+                  traits?: {
+                    mintable?: boolean | null;
+                    pausable?: boolean | null;
+                    blacklist?: boolean | null;
+                    fee_setter?: boolean | null;
+                    proxy_upgradeable?: boolean | null;
+                  } | null;
+                } | null;
               }
             | undefined;
           if (data) {
@@ -161,6 +171,22 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
             }
             if (Array.isArray(data.flags) && data.flags.length > 0) {
               text += `\n⚠ Flags: ${data.flags.join(', ')}`;
+            }
+            const contract = data.contract;
+            if (contract) {
+              const signals: string[] = [];
+              if (contract.verified === false) signals.push('unverified');
+              const t = contract.traits;
+              if (t) {
+                if (t.mintable === true) signals.push('mintable');
+                if (t.pausable === true) signals.push('pausable');
+                if (t.blacklist === true) signals.push('blacklist');
+                if (t.fee_setter === true) signals.push('fee_setter');
+                if (t.proxy_upgradeable === true) signals.push('proxy_upgradeable');
+              }
+              if (signals.length > 0) {
+                text += `\n🧱 Contract: ${signals.join(', ')}`;
+              }
             }
           }
           if (ev.receipt) {

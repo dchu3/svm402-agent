@@ -30,12 +30,39 @@ export interface ReplDeps {
 
 const ELEVATED_TOP10_PCT = 30;
 
+interface ContractSummaryShape {
+  verified?: boolean | null;
+  traits?: {
+    mintable?: boolean | null;
+    pausable?: boolean | null;
+    blacklist?: boolean | null;
+    fee_setter?: boolean | null;
+    proxy_upgradeable?: boolean | null;
+  } | null;
+}
+
+function compactContractSignals(contract: ContractSummaryShape | null | undefined): string[] {
+  if (!contract) return [];
+  const parts: string[] = [];
+  if (contract.verified === false) parts.push('unverified');
+  const t = contract.traits;
+  if (t) {
+    if (t.mintable === true) parts.push('mintable');
+    if (t.pausable === true) parts.push('pausable');
+    if (t.blacklist === true) parts.push('blacklist');
+    if (t.fee_setter === true) parts.push('fee_setter');
+    if (t.proxy_upgradeable === true) parts.push('proxy_upgradeable');
+  }
+  return parts;
+}
+
 function buildSummary(ev: ToolEndEvent): string | undefined {
   if (!ev.result.ok) return undefined;
   const data = ev.result.data as
     | {
         top10_concentration_pct?: number | null;
         holder_count?: number | null;
+        contract?: ContractSummaryShape | null;
       }
     | undefined;
   if (!data) return undefined;
@@ -47,6 +74,10 @@ function buildSummary(ev: ToolEndEvent): string | undefined {
   }
   if (typeof data.holder_count === 'number') {
     parts.push(`${data.holder_count.toLocaleString()} holders`);
+  }
+  const contractSignals = compactContractSignals(data.contract);
+  if (contractSignals.length > 0) {
+    parts.push(`contract ⚠ ${contractSignals.join(', ')}`);
   }
   return parts.length > 0 ? parts.join(' · ') : undefined;
 }
