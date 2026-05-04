@@ -46,24 +46,41 @@ function fmtAddr(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-export function formatNotification(event: NotificationEvent): string {
+const ADDRESS_REGEX = /0x[a-fA-F0-9]{40}/g;
+
+function escapeMarkdownV2(text: string): string {
+  // MarkdownV2 reserved characters per Telegram Bot API:
+  // _ * [ ] ( ) ~ ` > # + - = | { } . !  (and \ itself)
+  return text.replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
+function toMarkdownV2(plainText: string): string {
+  // Escape the whole string for MarkdownV2, then wrap any 0x-addresses in
+  // backticks so Telegram renders them as a tap-to-copy monospace span.
+  // Hex addresses contain no MarkdownV2 reserved chars, so escaping is a no-op
+  // on them and they remain matchable after the escape pass.
+  const escaped = escapeMarkdownV2(plainText);
+  return escaped.replace(ADDRESS_REGEX, (addr) => `\`${addr}\``);
+}
+
+function buildNotificationPlain(event: NotificationEvent): string {
   switch (event.type) {
     case 'watchlist:add': {
       const label = event.symbol ?? event.name ?? fmtAddr(event.address);
-      return `➕ Added to watchlist: ${label} (${fmtAddr(event.address)}) — score ${event.score.toFixed(1)}${
+      return `➕ Added to watchlist: ${label} (${event.address}) — score ${event.score.toFixed(1)}${
         event.reasoning ? `\n   ${event.reasoning}` : ''
       }`;
     }
     case 'watchlist:replace': {
       const inLabel = event.added.symbol ?? fmtAddr(event.added.address);
       const outLabel = event.removed.symbol ?? fmtAddr(event.removed.address);
-      return `🔁 Replaced ${outLabel} (score ${event.removed.score.toFixed(1)}) with ${inLabel} (score ${event.added.score.toFixed(1)})${
+      return `🔁 Replaced ${outLabel} (${event.removed.address}, score ${event.removed.score.toFixed(1)}) with ${inLabel} (${event.added.address}, score ${event.added.score.toFixed(1)})${
         event.added.reasoning ? `\n   ${event.added.reasoning}` : ''
       }`;
     }
     case 'watchlist:remove': {
       const label = event.symbol ?? fmtAddr(event.address);
-      return `➖ Removed from watchlist: ${label} (score ${event.score.toFixed(1)}) — ${event.reason}`;
+      return `➖ Removed from watchlist: ${label} (${event.address}, score ${event.score.toFixed(1)}) — ${event.reason}`;
     }
     case 'scan:start':
       return `🔍 Scan started — ${event.candidates} Base candidate(s)`;
@@ -74,13 +91,30 @@ export function formatNotification(event: NotificationEvent): string {
   }
 }
 
-export function summarizeWatchlist(entries: WatchlistEntry[]): string {
+export function formatNotification(event: NotificationEvent): string {
+  return buildNotificationPlain(event);
+}
+
+export function formatNotificationMarkdown(event: NotificationEvent): string {
+  return toMarkdownV2(buildNotificationPlain(event));
+}
+
+function summarizeWatchlistPlain(entries: WatchlistEntry[]): string {
   if (entries.length === 0) return 'Watchlist is empty.';
-  const lines = entries.map((e, i) => {
-    const label = e.symbol ?? e.name ?? fmtAddr(e.address);
-    return `${i + 1}. ${label} (${fmtAddr(e.address)}) — score ${e.score.toFixed(1)}`;
-  });
-  return lines.join('\n');
+  return entries
+    .map((e, i) => {
+      const label = e.symbol ?? e.name ?? fmtAddr(e.address);
+      return `${i + 1}. ${label} (${e.address}) — score ${e.score.toFixed(1)}`;
+    })
+    .join('\n');
+}
+
+export function summarizeWatchlist(entries: WatchlistEntry[]): string {
+  return summarizeWatchlistPlain(entries);
+}
+
+export function summarizeWatchlistMarkdown(entries: WatchlistEntry[]): string {
+  return toMarkdownV2(summarizeWatchlistPlain(entries));
 }
 
 export function compositeNotifier(notifiers: Notifier[]): Notifier {

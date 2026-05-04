@@ -8,7 +8,7 @@ import type { SpendTracker } from './oracle/handlers.js';
 import { formatAtomicUsdc, parseAtomicUsdc } from './util/usdc.js';
 import type { WatchlistDb } from './watchlist/db.js';
 import type { Scheduler } from './scheduler/index.js';
-import { summarizeWatchlist } from './notifications/index.js';
+import { summarizeWatchlist, summarizeWatchlistMarkdown } from './notifications/index.js';
 
 export interface TelegramBotDeps {
   agent: Agent;
@@ -47,6 +47,9 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
       '🔹 /balance - Show wallet balance\n' +
       '🔹 /spend - Show session spend\n' +
       '🔹 /receipts - Show payment receipts\n' +
+      '🔹 /watchlist - Show curated watchlist\n' +
+      '🔹 /scan - Run a watchlist scan now\n' +
+      '🔹 /scheduler - on | off | status\n' +
       '🔹 /clear - Reset chat history\n' +
       '🔹 /help - Show help message',
       { parse_mode: 'Markdown' }
@@ -63,7 +66,19 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
       await ctx.reply('Watchlist not enabled.');
       return;
     }
-    await ctx.reply(`📋 *Watchlist*\n\n${summarizeWatchlist(deps.db.list())}`, { parse_mode: 'Markdown' });
+    const entries = deps.db.list();
+    try {
+      await ctx.reply(`📋 *Watchlist*\n\n${summarizeWatchlistMarkdown(entries)}`, {
+        parse_mode: 'MarkdownV2',
+      });
+    } catch (err) {
+      debug('telegram-watchlist-markdown', err);
+      try {
+        await ctx.reply(`📋 Watchlist\n\n${summarizeWatchlist(entries)}`);
+      } catch (fallbackErr) {
+        debug('telegram-watchlist-fallback', fallbackErr);
+      }
+    }
   });
 
   bot.command('scan', async (ctx) => {
@@ -187,6 +202,9 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
       '🔹 /balance - Wallet address + USDC balance\n' +
       '🔹 /spend - Session spend vs cap\n' +
       '🔹 /receipts - List settled payments\n' +
+      '🔹 /watchlist - Show curated watchlist with scores\n' +
+      '🔹 /scan - Run a watchlist scan on demand\n' +
+      '🔹 /scheduler - `on` | `off` | (no arg for status)\n' +
       '🔹 /clear - Reset chat history\n' +
       '🔹 /help - Show this message',
       { parse_mode: 'Markdown' }
