@@ -104,9 +104,18 @@ both the CLI and the Telegram bot (when configured).
 
 | Command | Description |
 |---|---|
-| `/watchlist` | Show the current curated watchlist with scores |
-| `/scan` | Run a scheduler tick on demand |
-| `/scheduler on\|off` | Toggle the periodic scanner (or show status) |
+| `/balance` | Show wallet address + USDC balance on Base |
+| `/spend` | Show session spend vs cap |
+| `/receipts` | List recent settled payments |
+| `/watchlist` | Show the curated watchlist with scores and full contract addresses |
+| `/scan` | Run a watchlist scheduler tick on demand |
+| `/scheduler on\|off` | Toggle the periodic scanner (no arg shows status) |
+| `/clear` | Reset the agent's chat history |
+| `/help` | Show the in-bot help message |
+
+Watchlist add/remove/replace notifications include the **full** contract
+address. On Telegram the address is rendered in a monospace span so you can
+tap to copy it directly into another tool.
 
 ## What it does
 
@@ -185,12 +194,17 @@ You only need a few cents of USDC on Base. Easiest paths:
 
 ## Slash commands
 
+Available in both the CLI REPL and the Telegram bot (unless noted):
+
 - `/help` — list commands and tools
 - `/balance` — show wallet address + USDC balance on Base
 - `/spend` — total USDC spent this session
 - `/receipts` — list all settled payment receipts
+- `/watchlist` — show the curated watchlist (full contract addresses)
+- `/scan` — run a watchlist scheduler tick on demand
+- `/scheduler on|off` — toggle the periodic scanner (no arg shows status)
 - `/clear` — reset chat history
-- `/quit`, `/exit` — leave the REPL
+- `/quit`, `/exit` — leave the REPL (CLI only)
 
 ## Scripts
 
