@@ -116,6 +116,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           break;
         }
         const addr = tok.tokenAddress.toLowerCase();
+        // Defense-in-depth: the MCP-side ranker filters known sentinels and
+        // non-EVM addresses, but reject obviously invalid candidates here
+        // too so a future MCP-server change can't accidentally feed the
+        // zero address (or a non-40-hex string) to the oracle.
+        if (!/^0x[0-9a-f]{40}$/.test(addr) || /^0x0{40}$/.test(addr)) {
+          skippedInvalidAddress++;
+          continue;
+        }
         if (deps.db.get(addr)) {
           skippedAlreadyOnList++;
           continue;
