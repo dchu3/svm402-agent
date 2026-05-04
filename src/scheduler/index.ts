@@ -90,7 +90,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       await deps.notifier.notify({ type: 'scan:start', candidates: candidatesCount });
 
       const candidates: CandidateForEval[] = [];
+      const reportBudget = Math.max(1, deps.maxWatchlistSize);
       for (const tok of baseTokens) {
+        if (candidates.length >= reportBudget) {
+          debug('scheduler', 'report budget reached, stopping fetches');
+          break;
+        }
         const addr = tok.tokenAddress.toLowerCase();
         if (deps.db.get(addr)) {
           continue;
@@ -113,7 +118,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const report = result.data as ReportResponse;
         const token = (report as { token?: { symbol?: string | null; name?: string | null } }).token ?? undefined;
         candidates.push({
-          address: addr,
+          address: normalized.toLowerCase(),
           symbol: token?.symbol ?? null,
           name: token?.name ?? null,
           reportSummary: summarizeReport(report),
@@ -140,10 +145,17 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const rankedMap = new Map(evaluation.ranked.map((r) => [r.address, r]));
 
       // Step 1: apply explicit replacements (only when score strictly greater).
+      // Dedup: each candidate may only be added once, each entry may only be removed once.
+      const handled = new Set<string>();
+      const evictedFromDb = new Set<string>();
       for (const rep of evaluation.replacements) {
-        const ranked = rankedMap.get(rep.add);
-        const cand = candidateMap.get(rep.add);
-        const existing = deps.db.get(rep.remove);
+        const addAddr = (rep.add ?? '').toLowerCase();
+        const removeAddr = (rep.remove ?? '').toLowerCase();
+        if (!addAddr || !removeAddr) continue;
+        if (handled.has(addAddr) || evictedFromDb.has(removeAddr)) continue;
+        const ranked = rankedMap.get(addAddr);
+        const cand = candidateMap.get(addAddr);
+        const existing = deps.db.get(removeAddr);
         if (!ranked || !cand || !existing) continue;
         if (ranked.score <= existing.score) continue;
         deps.db.remove(existing.address);
@@ -155,6 +167,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           reasoning: ranked.reasoning,
           report: reportMap.get(cand.address),
         });
+        handled.add(addAddr);
+        evictedFromDb.add(removeAddr);
         added++;
         removed++;
         await deps.notifier.notify({
@@ -165,9 +179,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
 
       // Step 2: fill remaining capacity, or evict lowest if a stronger ranked candidate exists.
-      const handled = new Set<string>([
-        ...evaluation.replacements.map((r) => r.add),
-      ]);
       const sortedRanked = [...evaluation.ranked]
         .filter((r) => !handled.has(r.address) && candidateMap.has(r.address))
         .sort((a, b) => b.score - a.score);
@@ -249,7 +260,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   function start(): void {
     if (timer) return;
-    if (!enabled) return;
+    enabled = true;
     const initialDelay = Math.min(deps.intervalMs, 10_000);
     timer = setTimeout(async function tick() {
       try {
@@ -259,12 +270,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       } finally {
         if (enabled) {
           timer = setTimeout(tick, deps.intervalMs);
+        } else {
+          timer = undefined;
         }
       }
     }, initialDelay);
   }
 
   function stop(): void {
+    enabled = false;
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
@@ -274,13 +288,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   return {
     start,
     stop,
-    isRunning: () => timer !== undefined,
+    isRunning: () => enabled,
     isScanning: () => scanning,
     triggerNow: () => runScan(),
     setEnabled(value) {
-      enabled = value;
-      if (!value) stop();
-      else if (!timer) start();
+      if (value) start();
+      else stop();
     },
   };
 }

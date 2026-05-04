@@ -73,9 +73,19 @@ export function createDexscreenerMcpClient(opts: DexscreenerMcpClientOptions): D
         args: [serverPath],
         stderr: 'pipe',
       });
-      await c.connect(t);
-      client = c;
       transport = t;
+      try {
+        await c.connect(t);
+      } catch (err) {
+        try {
+          await t.close();
+        } catch (closeErr) {
+          debug('dexscreener-mcp', 'transport close after failed connect', closeErr);
+        }
+        transport = undefined;
+        throw err;
+      }
+      client = c;
       debug('dexscreener-mcp', 'connected');
     })().finally(() => {
       connecting = undefined;

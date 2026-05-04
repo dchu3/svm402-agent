@@ -1,4 +1,5 @@
 import type { WatchlistEntry } from '../watchlist/types.js';
+import { debug } from '../util/log.js';
 
 export type NotificationEvent =
   | {
@@ -85,7 +86,14 @@ export function summarizeWatchlist(entries: WatchlistEntry[]): string {
 export function compositeNotifier(notifiers: Notifier[]): Notifier {
   return {
     async notify(event) {
-      await Promise.all(notifiers.map((n) => n.notify(event).catch(() => undefined)));
+      await Promise.all(
+        notifiers.map((n) =>
+          n.notify(event).catch((err) => {
+            debug('notifier error', err);
+            return undefined;
+          }),
+        ),
+      );
     },
   };
 }
