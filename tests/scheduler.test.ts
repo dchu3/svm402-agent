@@ -48,6 +48,16 @@ function fakeDex(addresses: string[]): DexscreenerMcpClient {
     async getLatestBoostedTokens() {
       return [];
     },
+    async getTrendingBaseTokens() {
+      return addresses.map((a, i) => ({
+        chainId: 'base' as const,
+        tokenAddress: a,
+        symbol: `SYM${i}`,
+        volumeH24: 1000 - i,
+        txnsH24: 100,
+        pairCount: 1,
+      }));
+    },
   };
 }
 
@@ -85,7 +95,7 @@ function tempDbPath(): { dbPath: string; cleanup: () => void } {
 }
 
 describe('scheduler', () => {
-  it('filters non-base tokens and adds new ones up to capacity', async () => {
+  it('consumes trending base tokens and adds new ones up to capacity', async () => {
     const { dbPath, cleanup } = tempDbPath();
     try {
       const db = openWatchlistDb(dbPath);
@@ -93,14 +103,18 @@ describe('scheduler', () => {
         async connect() {},
         async close() {},
         async getTopBoostedTokens() {
-          return [
-            { chainId: 'base', tokenAddress: ADDR_A },
-            { chainId: 'solana', tokenAddress: ADDR_B },
-            { chainId: 'base', tokenAddress: ADDR_C },
-          ];
+          return [];
         },
         async getLatestBoostedTokens() {
           return [];
+        },
+        async getTrendingBaseTokens() {
+          // The MCP-side helper already filters to chainId=base, so the
+          // scheduler should consume the list as-is without re-filtering.
+          return [
+            { chainId: 'base', tokenAddress: ADDR_A, volumeH24: 1000, txnsH24: 50, pairCount: 1 },
+            { chainId: 'base', tokenAddress: ADDR_C, volumeH24: 500, txnsH24: 30, pairCount: 1 },
+          ];
         },
       };
       const agent = fakeAgent({

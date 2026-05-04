@@ -61,20 +61,32 @@ The bot is **strictly private** and will only respond to the authorized user ID.
 | `SVM402_PROMPT` | no | `rich` | `plain` falls back to `svm402> ` prompt |
 | `SVM402_NO_SPINNER` | no | `0` | `1` disables in-flight spinners (useful when piping output) |
 | `DEXSCREENER_MCP_PATH` | no | `../dex-screener-mcp/dist/index.js` | Path to the built dex-screener-mcp `index.js` |
-| `SCHEDULER_ENABLED` | no | `1` | `0` disables the periodic boosted-token scan |
+| `SCHEDULER_ENABLED` | no | `1` | `0` disables the periodic trending-token scan |
 | `SCHEDULER_INTERVAL_MINUTES` | no | `60` | How often the scheduler tick runs |
 | `WATCHLIST_MAX_SIZE` | no | `10` | Maximum tokens kept on the curated watchlist |
 | `WATCHLIST_DB_PATH` | no | `./data/watchlist.db` | SQLite path for the watchlist |
 
 ## DexScreener watchlist scheduler
 
-The agent can periodically pull the **top boosted tokens on Base** from
+The agent can periodically pull **trending tokens on Base** from
 DexScreener (via the [`dex-screener-mcp`](https://github.com/dchu3/dex-screener-mcp)
 MCP server) and cross-reference each one against the oracle `/report`
-endpoint. Gemini ranks every candidate; high-quality tokens are added to a
+endpoint. Candidates are sourced from `/latest/dex/search` using a small
+set of Base-relevant seed queries (`"WETH base"`, `"USDC base"`, `"base"` —
+the literal word "base" in the query is what narrows DexScreener's
+cross-chain search index to Base pairs), filtered to `chainId=base`,
+deduped by pair address, and ranked by aggregated 24h volume. Well-known
+infrastructure tokens (WETH, USDC, DAI, cbETH, …) and sentinel addresses
+are excluded. Gemini ranks every candidate; high-quality tokens are added to a
 local SQLite watchlist (max `WATCHLIST_MAX_SIZE`, default 10) and lower-ranked
 ones are evicted automatically. Adds, removes and replaces are broadcast to
 both the CLI and the Telegram bot (when configured).
+
+> **Why volume-based search instead of boosted tokens?** DexScreener's
+> `/token-boosts/*` feeds are global and dominated by Solana listings, so a
+> Base-filtered subset is frequently empty. The pair-search endpoint
+> exposes per-pair `chainId` plus 24h volume/txns, which produces a much
+> richer Base candidate pool.
 
 ### Setup
 

@@ -93,12 +93,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     });
 
     try {
-      const tokens = await deps.dexscreener.getTopBoostedTokens();
-      const baseTokens = tokens.filter((t) => t.chainId === 'base');
-      candidatesCount = baseTokens.length;
-      logWatchlist('dexscreener tokens fetched', {
-        total: tokens.length,
-        base: baseTokens.length,
+      const trendingLimit = Math.max(deps.maxWatchlistSize * 3, 30);
+      const tokens = await deps.dexscreener.getTrendingBaseTokens(trendingLimit);
+      candidatesCount = tokens.length;
+      logWatchlist('dexscreener trending base tokens fetched', {
+        trending: tokens.length,
+        limit: trendingLimit,
       });
       await deps.notifier.notify({ type: 'scan:start', candidates: candidatesCount });
 
@@ -109,13 +109,21 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       let skippedReportFailed = 0;
       let stoppedAtBudget = false;
       let stoppedAtSpendCap = false;
-      for (const tok of baseTokens) {
+      for (const tok of tokens) {
         if (candidates.length >= reportBudget) {
           stoppedAtBudget = true;
           logWatchlist('report budget reached, stopping fetches', { budget: reportBudget });
           break;
         }
         const addr = tok.tokenAddress.toLowerCase();
+        // Defense-in-depth: the MCP-side ranker filters known sentinels and
+        // non-EVM addresses, but reject obviously invalid candidates here
+        // too so a future MCP-server change can't accidentally feed the
+        // zero address (or a non-40-hex string) to the oracle.
+        if (!/^0x[0-9a-f]{40}$/.test(addr) || /^0x0{40}$/.test(addr)) {
+          skippedInvalidAddress++;
+          continue;
+        }
         if (deps.db.get(addr)) {
           skippedAlreadyOnList++;
           continue;
