@@ -8,3 +8,7 @@ dist/
 .idea/
 coverage/
 conductor/
+data/
+*.db
+*.db-shm
+*.db-wal

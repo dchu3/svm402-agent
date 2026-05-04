@@ -14,8 +14,10 @@
   },
   "dependencies": {
     "@google/genai": "^1.50.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@x402/evm": "^2.10.0",
     "@x402/fetch": "^2.10.0",
+    "better-sqlite3": "^12.9.0",
     "boxen": "^8.0.1",
     "cli-table3": "^0.6.5",
     "ora": "^9.4.0",
@@ -25,6 +27,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.12.12",
     "@typescript-eslint/eslint-plugin": "^7.11.0",
     "@typescript-eslint/parser": "^7.11.0",

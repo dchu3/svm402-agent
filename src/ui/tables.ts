@@ -155,6 +155,9 @@ const SLASH_ROWS: HelpRow[] = [
   { cmd: '/balance', desc: 'Show wallet address + USDC balance on Base' },
   { cmd: '/spend', desc: 'Show session spend (USDC) with progress bar' },
   { cmd: '/receipts', desc: 'List all settled payment receipts this session' },
+  { cmd: '/watchlist', desc: 'Show the current curated watchlist (max 10)' },
+  { cmd: '/scan', desc: 'Trigger a scheduler tick now (boosted scan)' },
+  { cmd: '/scheduler [on|off]', desc: 'Show or toggle the periodic scanner' },
   { cmd: '/clear', desc: 'Reset Gemini chat history (does not refund spend)' },
   { cmd: '/quit, /exit', desc: 'Leave the REPL' },
 ];

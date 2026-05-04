@@ -4,6 +4,9 @@ import type { Agent, ToolCallEvent, ToolEndEvent } from './agent.js';
 import type { OracleClient } from './oracle/client.js';
 import type { Wallet } from './wallet.js';
 import type { SpendTracker } from './oracle/handlers.js';
+import type { WatchlistDb } from './watchlist/db.js';
+import type { Scheduler } from './scheduler/index.js';
+import { summarizeWatchlist } from './notifications/index.js';
 import { buildPrompt } from './ui/prompt.js';
 import {
   printAgent,
@@ -26,6 +29,8 @@ export interface ReplDeps {
   oracle: OracleClient;
   wallet: Wallet;
   spend: SpendTracker;
+  db?: WatchlistDb;
+  getScheduler?: () => Scheduler | undefined;
 }
 
 const ELEVATED_TOP10_PCT = 30;
@@ -175,6 +180,56 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     if (line === '/clear') {
       deps.agent.reset();
       printInfo('chat history cleared.');
+      refreshPrompt();
+      rl.prompt();
+      continue;
+    }
+    if (line === '/watchlist') {
+      if (!deps.db) {
+        printInfo('watchlist not enabled.');
+      } else {
+        output.write(summarizeWatchlist(deps.db.list()) + '\n');
+      }
+      refreshPrompt();
+      rl.prompt();
+      continue;
+    }
+    if (line === '/scan') {
+      const sched = deps.getScheduler?.();
+      if (!sched) {
+        printError('scheduler not configured.');
+      } else if (sched.isScanning()) {
+        printInfo('scan already in progress.');
+      } else {
+        printInfo('triggering scan…');
+        sched
+          .triggerNow()
+          .then((res) => {
+            if (res.error) printError('scan failed', res.error);
+            else printInfo(`scan finished: +${res.added}/-${res.removed} of ${res.candidates}`);
+          })
+          .catch((err) => printError('scan error', err instanceof Error ? err.message : String(err)));
+      }
+      refreshPrompt();
+      rl.prompt();
+      continue;
+    }
+    if (line.startsWith('/scheduler')) {
+      const sched = deps.getScheduler?.();
+      if (!sched) {
+        printError('scheduler not configured.');
+      } else {
+        const arg = line.split(/\s+/)[1];
+        if (arg === 'on') {
+          sched.setEnabled(true);
+          printInfo('scheduler enabled.');
+        } else if (arg === 'off') {
+          sched.setEnabled(false);
+          printInfo('scheduler disabled.');
+        } else {
+          printInfo(`scheduler ${sched.isRunning() ? 'running' : 'stopped'}${sched.isScanning() ? ' (scanning…)' : ''}`);
+        }
+      }
       refreshPrompt();
       rl.prompt();
       continue;
