@@ -6,7 +6,7 @@ import type { OracleClient } from '../oracle/client.js';
 import type { Notifier } from '../notifications/index.js';
 import type { WatchlistDb } from '../watchlist/db.js';
 import type { ReportResponse } from '../oracle/schemas.js';
-import { debug } from '../util/log.js';
+import { debug, logWatchlist, warnWatchlist } from '../util/log.js';
 
 export interface SchedulerDeps {
   dexscreener: DexscreenerMcpClient;
@@ -34,6 +34,7 @@ export interface ScanResult {
   added: number;
   removed: number;
   skipped: boolean;
+  durationMs?: number;
   error?: string;
 }
 
@@ -72,7 +73,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   async function runScan(): Promise<ScanResult> {
     if (scanning) {
-      debug('scheduler', 'scan already running, skipping');
+      logWatchlist('scan requested but one is already running, skipping');
       return { candidates: 0, added: 0, removed: 0, skipped: true };
     }
     scanning = true;
@@ -83,36 +84,65 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     let candidatesCount = 0;
     let errorMessage: string | undefined;
 
+    logWatchlist('scan started', {
+      scanId,
+      maxWatchlistSize: deps.maxWatchlistSize,
+      currentSize: deps.db.count(),
+      spendUsed: deps.spend.total.toFixed(4),
+      spendCap: deps.spend.cap.toFixed(4),
+    });
+
     try {
       const tokens = await deps.dexscreener.getTopBoostedTokens();
       const baseTokens = tokens.filter((t) => t.chainId === 'base');
       candidatesCount = baseTokens.length;
+      logWatchlist('dexscreener tokens fetched', {
+        total: tokens.length,
+        base: baseTokens.length,
+      });
       await deps.notifier.notify({ type: 'scan:start', candidates: candidatesCount });
 
       const candidates: CandidateForEval[] = [];
       const reportBudget = Math.max(1, deps.maxWatchlistSize);
+      let skippedAlreadyOnList = 0;
+      let skippedInvalidAddress = 0;
+      let skippedReportFailed = 0;
+      let stoppedAtBudget = false;
+      let stoppedAtSpendCap = false;
       for (const tok of baseTokens) {
         if (candidates.length >= reportBudget) {
-          debug('scheduler', 'report budget reached, stopping fetches');
+          stoppedAtBudget = true;
+          logWatchlist('report budget reached, stopping fetches', { budget: reportBudget });
           break;
         }
         const addr = tok.tokenAddress.toLowerCase();
         if (deps.db.get(addr)) {
+          skippedAlreadyOnList++;
           continue;
         }
         if (deps.spend.wouldExceed(REPORT_PRICE)) {
-          debug('scheduler', 'spend cap reached, stopping report fetches');
+          stoppedAtSpendCap = true;
+          logWatchlist('spend cap would be exceeded, stopping report fetches', {
+            spendUsed: deps.spend.total.toFixed(4),
+            spendCap: deps.spend.cap.toFixed(4),
+            reportPrice: REPORT_PRICE,
+          });
           break;
         }
         let normalized: string;
         try {
           normalized = getAddress(addr);
         } catch {
+          skippedInvalidAddress++;
           continue;
         }
         const result = await handlers.get_report({ address: normalized }, { oracle: deps.oracle, spend: deps.spend });
         if (!result.ok || !result.data) {
-          debug('scheduler', 'report failed for', addr, result.error);
+          skippedReportFailed++;
+          warnWatchlist('report fetch failed for candidate', {
+            address: addr,
+            error: result.ok ? 'no_data' : result.error,
+          });
           continue;
         }
         const report = result.data as ReportResponse;
@@ -125,17 +155,48 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         });
       }
 
+      logWatchlist('candidate gathering complete', {
+        candidates: candidates.length,
+        skippedAlreadyOnList,
+        skippedInvalidAddress,
+        skippedReportFailed,
+        stoppedAtBudget,
+        stoppedAtSpendCap,
+      });
+
       if (candidates.length === 0) {
+        logWatchlist('no new candidates to evaluate; nothing to add or replace');
+        const durationMs = Date.now() - startedAt;
         deps.db.finishScan(scanId, { finishedAt: Date.now(), candidates: candidatesCount, added: 0, removed: 0 });
-        return { candidates: candidatesCount, added: 0, removed: 0, skipped: false };
+        await deps.notifier.notify({
+          type: 'scan:complete',
+          added: 0,
+          removed: 0,
+          candidates: candidatesCount,
+          durationMs,
+        });
+        return { candidates: candidatesCount, added: 0, removed: 0, skipped: false, durationMs };
       }
 
       const watchlist = deps.db.list();
+      logWatchlist('evaluating candidates with LLM', {
+        candidates: candidates.length,
+        currentWatchlistSize: watchlist.length,
+      });
       const evaluation = await deps.agent.evaluateCandidates({
         candidates,
         watchlist: watchlist.map((w) => ({ address: w.address, symbol: w.symbol, score: w.score })),
         maxSize: deps.maxWatchlistSize,
       });
+      logWatchlist('evaluation complete', {
+        ranked: evaluation.ranked.length,
+        replacements: evaluation.replacements.length,
+      });
+      if (evaluation.ranked.length === 0) {
+        warnWatchlist('LLM evaluator returned no ranked candidates; nothing will be added', {
+          candidates: candidates.length,
+        });
+      }
 
       const candidateMap = new Map(candidates.map((c) => [c.address, c]));
       const reportMap = new Map<string, ReportResponse>();
@@ -152,12 +213,32 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const addAddr = (rep.add ?? '').toLowerCase();
         const removeAddr = (rep.remove ?? '').toLowerCase();
         if (!addAddr || !removeAddr) continue;
-        if (handled.has(addAddr) || evictedFromDb.has(removeAddr)) continue;
+        if (handled.has(addAddr) || evictedFromDb.has(removeAddr)) {
+          logWatchlist('replacement skipped (dedup)', { add: addAddr, remove: removeAddr });
+          continue;
+        }
         const ranked = rankedMap.get(addAddr);
         const cand = candidateMap.get(addAddr);
         const existing = deps.db.get(removeAddr);
-        if (!ranked || !cand || !existing) continue;
-        if (ranked.score <= existing.score) continue;
+        if (!ranked || !cand || !existing) {
+          logWatchlist('replacement skipped (missing data)', {
+            add: addAddr,
+            remove: removeAddr,
+            hasRanked: Boolean(ranked),
+            hasCandidate: Boolean(cand),
+            hasExisting: Boolean(existing),
+          });
+          continue;
+        }
+        if (ranked.score <= existing.score) {
+          logWatchlist('replacement rejected (score not strictly greater)', {
+            add: addAddr,
+            addScore: ranked.score,
+            remove: removeAddr,
+            removeScore: existing.score,
+          });
+          continue;
+        }
         deps.db.remove(existing.address);
         const inserted = deps.db.upsert({
           address: cand.address,
@@ -171,6 +252,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         evictedFromDb.add(removeAddr);
         added++;
         removed++;
+        logWatchlist('replacement applied', {
+          add: cand.address,
+          addScore: ranked.score,
+          remove: existing.address,
+          removeScore: existing.score,
+        });
         await deps.notifier.notify({
           type: 'watchlist:replace',
           added: { address: inserted.address, symbol: inserted.symbol, score: inserted.score, reasoning: inserted.reasoning },
@@ -186,7 +273,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       for (const ranked of sortedRanked) {
         const cand = candidateMap.get(ranked.address);
         if (!cand) continue;
-        if (deps.db.get(ranked.address)) continue;
+        if (deps.db.get(ranked.address)) {
+          logWatchlist('candidate already on watchlist after step 1, skipping', { address: ranked.address });
+          continue;
+        }
         if (deps.db.count() < deps.maxWatchlistSize) {
           const inserted = deps.db.upsert({
             address: cand.address,
@@ -197,6 +287,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             report: reportMap.get(cand.address),
           });
           added++;
+          logWatchlist('added new entry to watchlist', {
+            address: inserted.address,
+            symbol: inserted.symbol,
+            score: inserted.score,
+          });
           await deps.notifier.notify({
             type: 'watchlist:add',
             address: inserted.address,
@@ -208,7 +303,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         } else {
           const lowest = deps.db.lowestScored();
           if (!lowest) break;
-          if (ranked.score <= lowest.score) continue;
+          if (ranked.score <= lowest.score) {
+            logWatchlist('eviction rejected (score not strictly greater than lowest)', {
+              candidate: ranked.address,
+              candidateScore: ranked.score,
+              lowest: lowest.address,
+              lowestScore: lowest.score,
+            });
+            continue;
+          }
           deps.db.remove(lowest.address);
           const inserted = deps.db.upsert({
             address: cand.address,
@@ -220,6 +323,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           });
           added++;
           removed++;
+          logWatchlist('evicted lowest-scored entry to make room', {
+            add: cand.address,
+            addScore: ranked.score,
+            remove: lowest.address,
+            removeScore: lowest.score,
+          });
           await deps.notifier.notify({
             type: 'watchlist:replace',
             added: { address: inserted.address, symbol: inserted.symbol, score: inserted.score, reasoning: inserted.reasoning },
@@ -228,22 +337,32 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         }
       }
 
+      const durationMs = Date.now() - startedAt;
       deps.db.finishScan(scanId, {
         finishedAt: Date.now(),
         candidates: candidatesCount,
         added,
         removed,
       });
+      logWatchlist('scan finished', {
+        added,
+        removed,
+        candidates: candidatesCount,
+        durationMs,
+        finalSize: deps.db.count(),
+      });
       await deps.notifier.notify({
         type: 'scan:complete',
         added,
         removed,
         candidates: candidatesCount,
-        durationMs: Date.now() - startedAt,
+        durationMs,
       });
-      return { candidates: candidatesCount, added, removed, skipped: false };
+      return { candidates: candidatesCount, added, removed, skipped: false, durationMs };
     } catch (err) {
       errorMessage = err instanceof Error ? err.message : String(err);
+      const durationMs = Date.now() - startedAt;
+      warnWatchlist('scan errored', { error: errorMessage, durationMs });
       deps.db.finishScan(scanId, {
         finishedAt: Date.now(),
         candidates: candidatesCount,
@@ -252,7 +371,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         error: errorMessage,
       });
       await deps.notifier.notify({ type: 'scan:error', message: errorMessage });
-      return { candidates: candidatesCount, added, removed, skipped: false, error: errorMessage };
+      return { candidates: candidatesCount, added, removed, skipped: false, durationMs, error: errorMessage };
     } finally {
       scanning = false;
     }

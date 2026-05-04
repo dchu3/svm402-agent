@@ -76,11 +76,17 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
       await ctx.reply('⏳ Scan already in progress.');
       return;
     }
-    await ctx.reply('🔍 Triggering scan…');
+    await ctx.reply('🔍 Triggering watchlist scan…');
     try {
       const res = await sched.triggerNow();
-      if (res.error) await ctx.reply(`❌ Scan failed: ${res.error}`);
-      else await ctx.reply(`✅ Scan done: +${res.added}/-${res.removed} of ${res.candidates}`);
+      if (res.error) {
+        await ctx.reply(`❌ Scan failed: ${res.error}`);
+      } else {
+        const dur = typeof res.durationMs === 'number' ? ` in ${(res.durationMs / 1000).toFixed(1)}s` : '';
+        await ctx.reply(
+          `✅ Scan done: +${res.added}/-${res.removed} of ${res.candidates} candidate(s)${dur}.`,
+        );
+      }
     } catch (err) {
       await ctx.reply(`❌ ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -297,7 +303,7 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
     { command: 'spend', description: 'Show session spend' },
     { command: 'receipts', description: 'Show payment receipts' },
     { command: 'watchlist', description: 'Show curated watchlist' },
-    { command: 'scan', description: 'Trigger a scheduler tick now' },
+    { command: 'scan', description: 'Run a watchlist scan now' },
     { command: 'scheduler', description: 'on | off | status' },
     { command: 'clear', description: 'Reset chat history' },
     { command: 'help', description: 'Show help message' },

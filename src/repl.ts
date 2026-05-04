@@ -201,12 +201,18 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
       } else if (sched.isScanning()) {
         printInfo('scan already in progress.');
       } else {
-        printInfo('triggering scan…');
+        printInfo('triggering watchlist scan…');
         sched
           .triggerNow()
           .then((res) => {
-            if (res.error) printError('scan failed', res.error);
-            else printInfo(`scan finished: +${res.added}/-${res.removed} of ${res.candidates}`);
+            if (res.error) {
+              printError('scan failed', res.error);
+              return;
+            }
+            const dur = typeof res.durationMs === 'number' ? ` in ${(res.durationMs / 1000).toFixed(1)}s` : '';
+            printInfo(
+              `scan finished: +${res.added}/-${res.removed} of ${res.candidates} candidate(s)${dur}.`,
+            );
           })
           .catch((err) => printError('scan error', err instanceof Error ? err.message : String(err)));
       }

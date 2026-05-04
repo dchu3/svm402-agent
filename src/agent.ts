@@ -2,7 +2,7 @@ import { GoogleGenAI, type Chat, type FunctionCall } from '@google/genai';
 import { TOOL_DECLARATIONS } from './oracle/tools.js';
 import { handlers, type HandlerDeps, TOOL_PRICES_USD, type ToolCallResult } from './oracle/handlers.js';
 import type { PaymentReceipt } from './oracle/client.js';
-import { debug } from './util/log.js';
+import { debug, warnWatchlist } from './util/log.js';
 
 const SYSTEM_INSTRUCTION = `
 You are svm402, an agent that helps users analyze ERC-20 tokens on Base mainnet.
@@ -195,6 +195,10 @@ export function createAgent(deps: AgentDeps): Agent {
     try {
       parsed = JSON.parse(text);
     } catch (err) {
+      warnWatchlist('evaluateCandidates JSON parse failed; treating result as empty', {
+        error: err instanceof Error ? err.message : String(err),
+        snippet: text.slice(0, 200),
+      });
       debug('evaluateCandidates parse error', err, text.slice(0, 500));
       return { ranked: [], replacements: [] };
     }
