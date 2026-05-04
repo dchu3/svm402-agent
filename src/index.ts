@@ -54,12 +54,12 @@ async function main(): Promise<void> {
   const mcpServerPath = process.env.DEXSCREENER_MCP_PATH ?? defaultMcpPath;
   const dexscreener = createDexscreenerMcpClient({ serverPath: mcpServerPath });
 
-  const dbPath = process.env.WATCHLIST_DB_PATH ?? path.resolve('./data/watchlist.db');
+  const dbPath = (process.env.WATCHLIST_DB_PATH ?? '').trim() || path.resolve('./data/watchlist.db');
   const db = openWatchlistDb(dbPath);
 
   const schedulerEnabled = envFlag('SCHEDULER_ENABLED', true);
-  const intervalMinutes = Number(process.env.SCHEDULER_INTERVAL_MINUTES ?? '60');
-  const maxWatchlistSize = Number(process.env.WATCHLIST_MAX_SIZE ?? '10');
+  const intervalMinutes = Number((process.env.SCHEDULER_INTERVAL_MINUTES ?? '').trim() || '60');
+  const maxWatchlistSize = Number((process.env.WATCHLIST_MAX_SIZE ?? '').trim() || '10');
 
   let usdcBalance: string | null = null;
   let balanceError: string | undefined;
