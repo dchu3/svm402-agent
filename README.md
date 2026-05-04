@@ -72,9 +72,12 @@ The agent can periodically pull **trending tokens on Base** from
 DexScreener (via the [`dex-screener-mcp`](https://github.com/dchu3/dex-screener-mcp)
 MCP server) and cross-reference each one against the oracle `/report`
 endpoint. Candidates are sourced from `/latest/dex/search` using a small
-set of Base-relevant seed queries (WETH, USDC, ETH), filtered to
-`chainId=base`, deduped by base-token address, and ranked by aggregated 24h
-volume. Gemini ranks every candidate; high-quality tokens are added to a
+set of Base-relevant seed queries (`"WETH base"`, `"USDC base"`, `"base"` —
+the literal word "base" in the query is what narrows DexScreener's
+cross-chain search index to Base pairs), filtered to `chainId=base`,
+deduped by pair address, and ranked by aggregated 24h volume. Well-known
+infrastructure tokens (WETH, USDC, DAI, cbETH, …) and sentinel addresses
+are excluded. Gemini ranks every candidate; high-quality tokens are added to a
 local SQLite watchlist (max `WATCHLIST_MAX_SIZE`, default 10) and lower-ranked
 ones are evicted automatically. Adds, removes and replaces are broadcast to
 both the CLI and the Telegram bot (when configured).
