@@ -6,6 +6,9 @@ import type { Wallet } from './wallet.js';
 import type { OracleClient } from './oracle/client.js';
 import type { SpendTracker } from './oracle/handlers.js';
 import { formatAtomicUsdc, parseAtomicUsdc } from './util/usdc.js';
+import type { WatchlistDb } from './watchlist/db.js';
+import type { Scheduler } from './scheduler/index.js';
+import { summarizeWatchlist } from './notifications/index.js';
 
 export interface TelegramBotDeps {
   agent: Agent;
@@ -14,6 +17,9 @@ export interface TelegramBotDeps {
   wallet: Wallet;
   spend: SpendTracker;
   oracle: OracleClient;
+  db?: WatchlistDb;
+  getScheduler?: () => Scheduler | undefined;
+  registerNotifier?: (bot: Telegraf) => void;
 }
 
 export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
@@ -50,6 +56,54 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
   bot.command('clear', async (ctx) => {
     deps.agent.reset();
     await ctx.reply('🧹 Chat history cleared.');
+  });
+
+  bot.command('watchlist', async (ctx) => {
+    if (!deps.db) {
+      await ctx.reply('Watchlist not enabled.');
+      return;
+    }
+    await ctx.reply(`📋 *Watchlist*\n\n${summarizeWatchlist(deps.db.list())}`, { parse_mode: 'Markdown' });
+  });
+
+  bot.command('scan', async (ctx) => {
+    const sched = deps.getScheduler?.();
+    if (!sched) {
+      await ctx.reply('Scheduler not configured.');
+      return;
+    }
+    if (sched.isScanning()) {
+      await ctx.reply('⏳ Scan already in progress.');
+      return;
+    }
+    await ctx.reply('🔍 Triggering scan…');
+    try {
+      const res = await sched.triggerNow();
+      if (res.error) await ctx.reply(`❌ Scan failed: ${res.error}`);
+      else await ctx.reply(`✅ Scan done: +${res.added}/-${res.removed} of ${res.candidates}`);
+    } catch (err) {
+      await ctx.reply(`❌ ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
+  bot.command('scheduler', async (ctx) => {
+    const sched = deps.getScheduler?.();
+    if (!sched) {
+      await ctx.reply('Scheduler not configured.');
+      return;
+    }
+    const arg = ctx.message.text.split(/\s+/)[1];
+    if (arg === 'on') {
+      sched.setEnabled(true);
+      await ctx.reply('▶️ Scheduler enabled.');
+    } else if (arg === 'off') {
+      sched.setEnabled(false);
+      await ctx.reply('⏸ Scheduler disabled.');
+    } else {
+      await ctx.reply(
+        `Scheduler ${sched.isRunning() ? 'running' : 'stopped'}${sched.isScanning() ? ' (scanning…)' : ''}`,
+      );
+    }
   });
 
   bot.command('balance', async (ctx) => {
@@ -242,9 +296,14 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
     { command: 'balance', description: 'Show wallet balance' },
     { command: 'spend', description: 'Show session spend' },
     { command: 'receipts', description: 'Show payment receipts' },
+    { command: 'watchlist', description: 'Show curated watchlist' },
+    { command: 'scan', description: 'Trigger a scheduler tick now' },
+    { command: 'scheduler', description: 'on | off | status' },
     { command: 'clear', description: 'Reset chat history' },
     { command: 'help', description: 'Show help message' },
   ]);
+
+  deps.registerNotifier?.(bot);
 
   bot.launch();
   console.log('Telegram bot is running...');

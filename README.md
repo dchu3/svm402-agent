@@ -60,6 +60,41 @@ The bot is **strictly private** and will only respond to the authorized user ID.
 | `SVM402_ASCII` | no | `0` | `1` falls back to plain ASCII glyphs/borders (for picky terminals) |
 | `SVM402_PROMPT` | no | `rich` | `plain` falls back to `svm402> ` prompt |
 | `SVM402_NO_SPINNER` | no | `0` | `1` disables in-flight spinners (useful when piping output) |
+| `DEXSCREENER_MCP_PATH` | no | `../dex-screener-mcp/dist/index.js` | Path to the built dex-screener-mcp `index.js` |
+| `SCHEDULER_ENABLED` | no | `1` | `0` disables the periodic boosted-token scan |
+| `SCHEDULER_INTERVAL_MINUTES` | no | `60` | How often the scheduler tick runs |
+| `WATCHLIST_MAX_SIZE` | no | `10` | Maximum tokens kept on the curated watchlist |
+| `WATCHLIST_DB_PATH` | no | `./data/watchlist.db` | SQLite path for the watchlist |
+
+## DexScreener watchlist scheduler
+
+The agent can periodically pull the **top boosted tokens on Base** from
+DexScreener (via the [`dex-screener-mcp`](https://github.com/dchu3/dex-screener-mcp)
+MCP server) and cross-reference each one against the oracle `/report`
+endpoint. Gemini ranks every candidate; high-quality tokens are added to a
+local SQLite watchlist (max `WATCHLIST_MAX_SIZE`, default 10) and lower-ranked
+ones are evicted automatically. Adds, removes and replaces are broadcast to
+both the CLI and the Telegram bot (when configured).
+
+### Setup
+
+1. Clone and build `dex-screener-mcp` next to `svm402-agent`:
+   ```bash
+   git clone https://github.com/dchu3/dex-screener-mcp ../dex-screener-mcp
+   (cd ../dex-screener-mcp && npm install && npm run build)
+   ```
+   Override the location with `DEXSCREENER_MCP_PATH` if needed.
+2. Ensure `MAX_SPEND_USDC` is high enough — each scan can fetch up to
+   `WATCHLIST_MAX_SIZE` reports at $0.01 USDC each. With the default cap of
+   `0.10`, the scheduler will gracefully short-circuit once the cap is hit.
+
+### Slash / bot commands
+
+| Command | Description |
+|---|---|
+| `/watchlist` | Show the current curated watchlist with scores |
+| `/scan` | Run a scheduler tick on demand |
+| `/scheduler on\|off` | Toggle the periodic scanner (or show status) |
 
 ## What it does
 

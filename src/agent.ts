@@ -88,7 +88,76 @@ export interface Agent {
   chat: Chat;
   send(message: string, hooks?: SendHooks): Promise<string>;
   reset(): void;
+  evaluateCandidates(input: EvaluateCandidatesInput): Promise<EvaluateCandidatesResult>;
 }
+
+export interface CandidateForEval {
+  address: string;
+  symbol: string | null;
+  name: string | null;
+  reportSummary: Record<string, unknown>;
+}
+
+export interface WatchlistEntryForEval {
+  address: string;
+  symbol: string | null;
+  score: number;
+}
+
+export interface EvaluateCandidatesInput {
+  candidates: CandidateForEval[];
+  watchlist: WatchlistEntryForEval[];
+  maxSize: number;
+}
+
+export interface RankedCandidate {
+  address: string;
+  score: number;
+  reasoning: string;
+}
+
+export interface ReplacementProposal {
+  add: string;
+  remove: string;
+}
+
+export interface EvaluateCandidatesResult {
+  ranked: RankedCandidate[];
+  replacements: ReplacementProposal[];
+}
+
+const EVALUATION_INSTRUCTION = `
+You are a Base mainnet ERC-20 token analyst. You will be given a list of new
+candidate tokens (with their /report data) and the current watchlist (max
+size given). Score each candidate from 0 to 100, where higher means a safer
+and more attractive token to keep on a watchlist.
+
+Prefer:
+- verified contracts
+- low circulating top-10 concentration (<30 is good)
+- healthy holder count
+- absence of mintable / pausable / blacklist / fee_setter / proxy_upgradeable traits set to true
+- absence of warning flags (high_concentration, deployer_holds_large, unverified_contract, etc.)
+
+Penalise:
+- unverified contracts
+- elevated concentration (>=30%) without burn/LP justification
+- mintable, pausable, blacklist, fee_setter, proxy_upgradeable traits = true
+- any honeypot/red-flag style flags
+
+You must reply with strict JSON only:
+{
+  "ranked": [{ "address": string, "score": number, "reasoning": string }],
+  "replacements": [{ "add": string, "remove": string }]
+}
+
+Rules:
+- Only propose a replacement when the candidate's score is strictly greater
+  than the score of the watchlist entry being removed.
+- Only address values from the inputs may appear in ranked or replacements.
+- Reasoning must be one short sentence.
+- Output JSON only — no commentary, no markdown fences.
+`.trim();
 
 export function createAgent(deps: AgentDeps): Agent {
   const ai = new GoogleGenAI({ apiKey: deps.apiKey });
@@ -102,6 +171,61 @@ export function createAgent(deps: AgentDeps): Agent {
     });
   let chat = buildChat();
 
+  async function evaluateCandidates(input: EvaluateCandidatesInput): Promise<EvaluateCandidatesResult> {
+    const prompt = [
+      `Max watchlist size: ${input.maxSize}`,
+      '',
+      'Current watchlist:',
+      JSON.stringify(input.watchlist, null, 2),
+      '',
+      'Candidates to evaluate (each contains a summary of /report data):',
+      JSON.stringify(input.candidates, null, 2),
+    ].join('\n');
+
+    const response = await ai.models.generateContent({
+      model: deps.model,
+      contents: prompt,
+      config: {
+        systemInstruction: EVALUATION_INSTRUCTION,
+        responseMimeType: 'application/json',
+      },
+    });
+    const text = response.text ?? '';
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      debug('evaluateCandidates parse error', err, text.slice(0, 500));
+      return { ranked: [], replacements: [] };
+    }
+    const ranked: RankedCandidate[] = [];
+    const replacements: ReplacementProposal[] = [];
+    if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>;
+      if (Array.isArray(obj.ranked)) {
+        for (const r of obj.ranked) {
+          if (!r || typeof r !== 'object') continue;
+          const rec = r as Record<string, unknown>;
+          if (typeof rec.address !== 'string' || typeof rec.score !== 'number') continue;
+          ranked.push({
+            address: rec.address.toLowerCase(),
+            score: rec.score,
+            reasoning: typeof rec.reasoning === 'string' ? rec.reasoning : '',
+          });
+        }
+      }
+      if (Array.isArray(obj.replacements)) {
+        for (const r of obj.replacements) {
+          if (!r || typeof r !== 'object') continue;
+          const rec = r as Record<string, unknown>;
+          if (typeof rec.add !== 'string' || typeof rec.remove !== 'string') continue;
+          replacements.push({ add: rec.add.toLowerCase(), remove: rec.remove.toLowerCase() });
+        }
+      }
+    }
+    return { ranked, replacements };
+  }
+
   return {
     get chat() {
       return chat;
@@ -109,6 +233,7 @@ export function createAgent(deps: AgentDeps): Agent {
     reset() {
       chat = buildChat();
     },
+    evaluateCandidates,
     async send(message: string, hooks?: SendHooks): Promise<string> {
       let response = await chat.sendMessage({ message });
       let safetyHops = 0;

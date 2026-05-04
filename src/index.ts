@@ -1,4 +1,6 @@
 import process from 'node:process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createWallet } from './wallet.js';
 import { createOracleClient } from './oracle/client.js';
 import { createSpendTracker } from './oracle/handlers.js';
@@ -6,7 +8,12 @@ import { createAgent } from './agent.js';
 import { startRepl } from './repl.js';
 import { startTelegramBot } from './telegram.js';
 import { renderBanner } from './ui/banner.js';
-import { printError } from './ui/render.js';
+import { printError, printInfo, printWarn } from './ui/render.js';
+import { createDexscreenerMcpClient } from './dexscreener/mcp-client.js';
+import { openWatchlistDb } from './watchlist/db.js';
+import { createCliNotifier } from './notifications/cli.js';
+import { compositeNotifier, type Notifier } from './notifications/index.js';
+import { createScheduler, type Scheduler } from './scheduler/index.js';
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -15,6 +22,12 @@ function requireEnv(name: string): string {
     process.exit(1);
   }
   return v;
+}
+
+function envFlag(name: string, defaultValue: boolean): boolean {
+  const v = process.env[name];
+  if (v === undefined) return defaultValue;
+  return v === '1' || v.toLowerCase() === 'true';
 }
 
 async function main(): Promise<void> {
@@ -36,6 +49,18 @@ async function main(): Promise<void> {
   const spend = createSpendTracker(cap);
   const agent = createAgent({ apiKey: geminiApiKey, model, oracle, spend });
 
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const defaultMcpPath = path.resolve(here, '../../dex-screener-mcp/dist/index.js');
+  const mcpServerPath = process.env.DEXSCREENER_MCP_PATH ?? defaultMcpPath;
+  const dexscreener = createDexscreenerMcpClient({ serverPath: mcpServerPath });
+
+  const dbPath = process.env.WATCHLIST_DB_PATH ?? path.resolve('./data/watchlist.db');
+  const db = openWatchlistDb(dbPath);
+
+  const schedulerEnabled = envFlag('SCHEDULER_ENABLED', true);
+  const intervalMinutes = Number(process.env.SCHEDULER_INTERVAL_MINUTES ?? '60');
+  const maxWatchlistSize = Number(process.env.WATCHLIST_MAX_SIZE ?? '10');
+
   let usdcBalance: string | null = null;
   let balanceError: string | undefined;
   try {
@@ -56,22 +81,89 @@ async function main(): Promise<void> {
     }),
   );
 
+  const cliNotifier = createCliNotifier();
+  const notifiers: Notifier[] = [cliNotifier];
+
+  const schedulerRef: { current: Scheduler | undefined } = { current: undefined };
+  let allowedUserId: number | undefined;
+
   if (telegramToken && telegramAllowedUser) {
-    const allowedUserId = Number(telegramAllowedUser);
-    if (isNaN(allowedUserId)) {
+    const parsed = Number(telegramAllowedUser);
+    if (isNaN(parsed)) {
       printError('TELEGRAM_ALLOWED_USER_ID must be a number.');
       process.exit(1);
     }
+    allowedUserId = parsed;
+  }
+
+  if (allowedUserId !== undefined && telegramToken) {
+    const { createTelegramNotifier } = await import('./notifications/telegram.js');
+    const userId = allowedUserId;
     await startTelegramBot({
       agent,
       token: telegramToken,
-      allowedUserId,
+      allowedUserId: userId,
       oracle,
       wallet,
       spend,
+      registerNotifier: (bot) => {
+        notifiers.push(createTelegramNotifier(bot, userId));
+      },
+      getScheduler: () => schedulerRef.current,
+      db,
     });
+  }
+
+  const notifier = compositeNotifier(notifiers);
+  const scheduler = createScheduler({
+    dexscreener,
+    oracle,
+    spend,
+    agent,
+    db,
+    notifier,
+    intervalMs: Math.max(1, intervalMinutes) * 60_000,
+    maxWatchlistSize: Math.max(1, Math.min(50, maxWatchlistSize)),
+    enabled: schedulerEnabled,
+  });
+  schedulerRef.current = scheduler;
+  if (schedulerEnabled) {
+    try {
+      await dexscreener.connect();
+      scheduler.start();
+      printInfo(`Scheduler enabled — scanning Base every ${intervalMinutes} min (watchlist max ${maxWatchlistSize}).`);
+    } catch (err) {
+      printWarn(
+        `Scheduler disabled: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   } else {
-    await startRepl({ agent, oracle, wallet, spend });
+    printInfo('Scheduler disabled (SCHEDULER_ENABLED=0). Use /scheduler on to start.');
+  }
+
+  const shutdown = async (): Promise<void> => {
+    scheduler.stop();
+    try {
+      await dexscreener.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      db.close();
+    } catch {
+      /* ignore */
+    }
+  };
+  process.once('SIGINT', () => {
+    void shutdown();
+  });
+  process.once('SIGTERM', () => {
+    void shutdown();
+  });
+
+  if (allowedUserId === undefined) {
+    await startRepl({ agent, oracle, wallet, spend, db, getScheduler: () => scheduler });
+    await shutdown();
   }
 }
 
