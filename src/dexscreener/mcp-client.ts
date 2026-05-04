@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import type { BoostedToken } from './types.js';
+import type { BoostedToken, TrendingBaseToken } from './types.js';
 import { debug } from '../util/log.js';
 
 export interface DexscreenerMcpClientOptions {
@@ -15,6 +15,7 @@ export interface DexscreenerMcpClient {
   close(): Promise<void>;
   getTopBoostedTokens(): Promise<BoostedToken[]>;
   getLatestBoostedTokens(): Promise<BoostedToken[]>;
+  getTrendingBaseTokens(limit?: number): Promise<TrendingBaseToken[]>;
 }
 
 function extractTextPayload(content: unknown): string {
@@ -48,6 +49,31 @@ function parseBoostedTokens(text: string): BoostedToken[] {
     const e = entry as Record<string, unknown>;
     if (typeof e.chainId !== 'string' || typeof e.tokenAddress !== 'string') continue;
     out.push(e as unknown as BoostedToken);
+  }
+  return out;
+}
+
+function parseTrendingBaseTokens(text: string): TrendingBaseToken[] {
+  if (!text) return [];
+  if (text.startsWith('Error:')) {
+    throw new Error(text);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(
+      `dexscreener: failed to parse JSON response: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out: TrendingBaseToken[] = [];
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    if (e.chainId !== 'base') continue;
+    if (typeof e.tokenAddress !== 'string') continue;
+    out.push(e as unknown as TrendingBaseToken);
   }
   return out;
 }
@@ -106,6 +132,21 @@ export function createDexscreenerMcpClient(opts: DexscreenerMcpClientOptions): D
     return parseBoostedTokens(text);
   }
 
+  async function callTrendingBaseTool(limit?: number): Promise<TrendingBaseToken[]> {
+    await ensureConnected();
+    if (!client) throw new Error('dexscreener-mcp client not connected');
+    const args: Record<string, unknown> = {};
+    if (typeof limit === 'number' && Number.isFinite(limit)) {
+      args.limit = Math.max(1, Math.min(100, Math.floor(limit)));
+    }
+    const result = await client.callTool({ name: 'get_trending_base_tokens', arguments: args });
+    if ((result as { isError?: boolean }).isError) {
+      throw new Error('dexscreener-mcp: get_trending_base_tokens returned isError');
+    }
+    const text = extractTextPayload((result as { content?: unknown }).content);
+    return parseTrendingBaseTokens(text);
+  }
+
   return {
     connect: ensureConnected,
     async close() {
@@ -124,5 +165,6 @@ export function createDexscreenerMcpClient(opts: DexscreenerMcpClientOptions): D
     },
     getTopBoostedTokens: () => callBoostedTool('get_top_boosted_tokens'),
     getLatestBoostedTokens: () => callBoostedTool('get_latest_boosted_tokens'),
+    getTrendingBaseTokens: (limit?: number) => callTrendingBaseTool(limit),
   };
 }

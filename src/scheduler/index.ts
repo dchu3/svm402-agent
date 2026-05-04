@@ -93,12 +93,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     });
 
     try {
-      const tokens = await deps.dexscreener.getTopBoostedTokens();
-      const baseTokens = tokens.filter((t) => t.chainId === 'base');
-      candidatesCount = baseTokens.length;
-      logWatchlist('dexscreener tokens fetched', {
-        total: tokens.length,
-        base: baseTokens.length,
+      const trendingLimit = Math.max(deps.maxWatchlistSize * 3, 30);
+      const tokens = await deps.dexscreener.getTrendingBaseTokens(trendingLimit);
+      candidatesCount = tokens.length;
+      logWatchlist('dexscreener trending base tokens fetched', {
+        trending: tokens.length,
+        limit: trendingLimit,
       });
       await deps.notifier.notify({ type: 'scan:start', candidates: candidatesCount });
 
@@ -109,7 +109,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       let skippedReportFailed = 0;
       let stoppedAtBudget = false;
       let stoppedAtSpendCap = false;
-      for (const tok of baseTokens) {
+      for (const tok of tokens) {
         if (candidates.length >= reportBudget) {
           stoppedAtBudget = true;
           logWatchlist('report budget reached, stopping fetches', { budget: reportBudget });
