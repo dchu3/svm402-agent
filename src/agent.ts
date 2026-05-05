@@ -1,4 +1,5 @@
 import { GoogleGenAI, type Chat, type FunctionCall } from '@google/genai';
+import { z } from 'zod';
 import { TOOL_DECLARATIONS } from './oracle/tools.js';
 import { handlers, type HandlerDeps, TOOL_PRICES_USD, type ToolCallResult } from './oracle/handlers.js';
 import type { PaymentReceipt } from './oracle/client.js';
@@ -126,6 +127,22 @@ export interface EvaluateCandidatesResult {
   replacements: ReplacementProposal[];
 }
 
+const RankedCandidateSchema = z.object({
+  address: z.string().transform((s) => s.toLowerCase()),
+  score: z.number(),
+  reasoning: z.string().default(''),
+});
+
+const ReplacementProposalSchema = z.object({
+  add: z.string().transform((s) => s.toLowerCase()),
+  remove: z.string().transform((s) => s.toLowerCase()),
+});
+
+const EvaluationResponseSchema = z.object({
+  ranked: z.array(RankedCandidateSchema).default([]),
+  replacements: z.array(ReplacementProposalSchema).default([]),
+});
+
 const EVALUATION_INSTRUCTION = `
 You are a Base mainnet ERC-20 token analyst. You will be given a list of new
 candidate tokens (with their /report data) and the current watchlist (max
@@ -202,32 +219,17 @@ export function createAgent(deps: AgentDeps): Agent {
       debug('evaluateCandidates parse error', err, text.slice(0, 500));
       return { ranked: [], replacements: [] };
     }
-    const ranked: RankedCandidate[] = [];
-    const replacements: ReplacementProposal[] = [];
-    if (parsed && typeof parsed === 'object') {
-      const obj = parsed as Record<string, unknown>;
-      if (Array.isArray(obj.ranked)) {
-        for (const r of obj.ranked) {
-          if (!r || typeof r !== 'object') continue;
-          const rec = r as Record<string, unknown>;
-          if (typeof rec.address !== 'string' || typeof rec.score !== 'number') continue;
-          ranked.push({
-            address: rec.address.toLowerCase(),
-            score: rec.score,
-            reasoning: typeof rec.reasoning === 'string' ? rec.reasoning : '',
-          });
-        }
-      }
-      if (Array.isArray(obj.replacements)) {
-        for (const r of obj.replacements) {
-          if (!r || typeof r !== 'object') continue;
-          const rec = r as Record<string, unknown>;
-          if (typeof rec.add !== 'string' || typeof rec.remove !== 'string') continue;
-          replacements.push({ add: rec.add.toLowerCase(), remove: rec.remove.toLowerCase() });
-        }
-      }
+
+    const result = EvaluationResponseSchema.safeParse(parsed);
+    if (!result.success) {
+      warnWatchlist('evaluateCandidates schema validation failed; treating result as empty', {
+        error: result.error.message,
+        snippet: text.slice(0, 500),
+      });
+      return { ranked: [], replacements: [] };
     }
-    return { ranked, replacements };
+
+    return result.data;
   }
 
   return {
