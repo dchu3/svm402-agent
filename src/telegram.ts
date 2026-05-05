@@ -29,6 +29,19 @@ export interface TelegramBotDeps {
 export async function startTelegramBot(deps: TelegramBotDeps): Promise<{ stop: () => void }> {
   const bot = new Telegraf(deps.token);
 
+  // Global error handler — without this, any uncaught error inside a command
+  // handler (e.g. a Telegram API 400 from a bad parse_mode entity) escapes
+  // through Telegraf's middleware as an unhandled rejection and crashes the
+  // entire process, killing both the REPL and the bot.
+  bot.catch((err, ctx) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    debug('telegram', `handler error in update ${ctx.update?.update_id}: ${msg}`);
+    // Best-effort plain-text apology; ignore any secondary failure.
+    if (ctx.chat) {
+      ctx.reply(`⚠️ Internal error handling that command: ${msg.slice(0, 200)}`).catch(() => undefined);
+    }
+  });
+
   // Authorization Middleware
   bot.use(async (ctx, next) => {
     const userId = ctx.from?.id;
@@ -56,7 +69,6 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<{ stop: (
       '🔹 /scheduler - on | off | status\n' +
       '🔹 /clear - Reset chat history\n' +
       '🔹 /help - Show help message',
-      { parse_mode: 'Markdown' }
     );
   });
 
@@ -199,24 +211,26 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<{ stop: (
   });
 
   bot.command('help', async (ctx) => {
+    // Plain text (no parse_mode) — command names contain underscores
+    // (/trade_on, /trade_off, /trade_status) which Telegram's legacy Markdown
+    // parser interprets as italic delimiters and rejects when unbalanced.
     await ctx.reply(
-      '📖 *HOW TO USE:*\n' +
+      '📖 HOW TO USE:\n' +
       'Just send a 0x-prefixed token address (Base mainnet only) and I will perform a security audit.\n\n' +
-      '💡 *COMMANDS:*\n' +
+      '💡 COMMANDS:\n' +
       '🔹 /balance - Wallet address + USDC balance\n' +
       '🔹 /spend - Session spend vs cap\n' +
       '🔹 /receipts - List settled payments\n' +
       '🔹 /watchlist - Show curated watchlist with scores\n' +
       '🔹 /scan - Run a watchlist scan on demand\n' +
-      '🔹 /scheduler - `on` | `off` | (no arg for status)\n' +
+      '🔹 /scheduler - on | off | (no arg for status)\n' +
       '🔹 /positions - Show open trading positions\n' +
       '🔹 /trades - Show recent trades\n' +
       '🔹 /trade_on | /trade_off - Toggle the trading engine\n' +
       '🔹 /trade_status - Show engine config\n' +
-      '🔹 /sell `<addr>` - Manually close a position\n' +
+      '🔹 /sell <addr> - Manually close a position\n' +
       '🔹 /clear - Reset chat history\n' +
       '🔹 /help - Show this message',
-      { parse_mode: 'Markdown' }
     );
   });
 
