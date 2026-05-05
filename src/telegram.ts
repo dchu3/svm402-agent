@@ -22,7 +22,7 @@ export interface TelegramBotDeps {
   registerNotifier?: (bot: Telegraf) => void;
 }
 
-export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
+export async function startTelegramBot(deps: TelegramBotDeps): Promise<{ stop: () => void }> {
   const bot = new Telegraf(deps.token);
 
   // Authorization Middleware
@@ -329,10 +329,12 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<void> {
 
   deps.registerNotifier?.(bot);
 
-  bot.launch();
+  void bot.launch();
   console.log('Telegram bot is running...');
 
-  // Enable graceful stop
-  process.once('SIGINT', () => bot.stop('SIGINT'));
-  process.once('SIGTERM', () => bot.stop('SIGTERM'));
+  return {
+    stop: (reason?: string) => {
+      bot.stop(reason);
+    }
+  };
 }

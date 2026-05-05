@@ -86,6 +86,7 @@ async function main(): Promise<void> {
 
   const schedulerRef: { current: Scheduler | undefined } = { current: undefined };
   let allowedUserId: number | undefined;
+  let botHandle: { stop: () => void } | undefined;
 
   if (telegramToken && telegramAllowedUser) {
     const parsed = Number(telegramAllowedUser);
@@ -99,7 +100,7 @@ async function main(): Promise<void> {
   if (allowedUserId !== undefined && telegramToken) {
     const { createTelegramNotifier } = await import('./notifications/telegram.js');
     const userId = allowedUserId;
-    await startTelegramBot({
+    botHandle = await startTelegramBot({
       agent,
       token: telegramToken,
       allowedUserId: userId,
@@ -143,6 +144,13 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     scheduler.stop();
+    if (botHandle) {
+      try {
+        botHandle.stop();
+      } catch {
+        /* ignore */
+      }
+    }
     try {
       await dexscreener.close();
     } catch {
@@ -161,10 +169,8 @@ async function main(): Promise<void> {
     void shutdown();
   });
 
-  if (allowedUserId === undefined) {
-    await startRepl({ agent, oracle, wallet, spend, db, getScheduler: () => scheduler });
-    await shutdown();
-  }
+  await startRepl({ agent, oracle, wallet, spend, db, getScheduler: () => scheduler });
+  await shutdown();
 }
 
 main().catch((err) => {
