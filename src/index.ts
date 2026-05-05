@@ -14,6 +14,12 @@ import { openWatchlistDb } from './watchlist/db.js';
 import { createCliNotifier } from './notifications/cli.js';
 import { compositeNotifier, type Notifier } from './notifications/index.js';
 import { createScheduler, type Scheduler } from './scheduler/index.js';
+import { openTradingDb } from './trading/db.js';
+import { createTradingStore } from './trading/store.js';
+import { createUniswapV3Adapter } from './trading/dex/uniswapV3.js';
+import { createDexRegistry } from './trading/dex/index.js';
+import { createTradingEngine, type TradingEngine } from './trading/engine.js';
+import type { TradingConfig } from './trading/types.js';
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -28,6 +34,38 @@ function envFlag(name: string, defaultValue: boolean): boolean {
   const v = process.env[name];
   if (v === undefined) return defaultValue;
   return v === '1' || v.toLowerCase() === 'true';
+}
+
+function envNumber(name: string, defaultValue: number): number {
+  const raw = (process.env[name] ?? '').trim();
+  if (raw === '') return defaultValue;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) {
+    printWarn(`Ignoring invalid ${name}=${raw}; using default ${defaultValue}.`);
+    return defaultValue;
+  }
+  return n;
+}
+
+function buildTradingConfig(): TradingConfig {
+  const slippageBpsRaw = envNumber('TRADING_SLIPPAGE_BPS', 100);
+  const slippageBps = Math.max(1, Math.min(500, Math.round(slippageBpsRaw)));
+  return {
+    enabled: envFlag('TRADING_ENABLED', false),
+    live: envFlag('TRADING_LIVE', false),
+    minScore: envNumber('TRADING_MIN_SCORE', 80),
+    tradeSizeUsdc: envNumber('TRADE_SIZE_USDC', 5),
+    maxOpenPositions: Math.max(1, Math.min(50, Math.floor(envNumber('MAX_OPEN_POSITIONS', 3)))),
+    slippageBps,
+    monitorIntervalMs: Math.max(10, Math.floor(envNumber('TRADING_MONITOR_INTERVAL_SEC', 60))) * 1000,
+    dexName: (process.env.TRADING_DEX ?? 'uniswap-v3').toLowerCase(),
+    policy: {
+      takeProfitPct: envNumber('TP_PCT', 50),
+      stopLossPct: envNumber('SL_PCT', 20),
+      trailingStopPct: envNumber('TRAILING_STOP_PCT', 15),
+      maxHoldMs: Math.max(0, Math.floor(envNumber('MAX_HOLD_MINUTES', 1440))) * 60_000,
+    },
+  };
 }
 
 async function main(): Promise<void> {
@@ -84,6 +122,20 @@ async function main(): Promise<void> {
   const cliNotifier = createCliNotifier();
   const notifiers: Notifier[] = [cliNotifier];
 
+  // Trading engine wiring (dry-run by default; only goes live when
+  // TRADING_LIVE=1 in the environment).
+  const tradingConfig = buildTradingConfig();
+  const tradingDbPath =
+    (process.env.TRADING_DB_PATH ?? '').trim() || path.resolve('./data/trading.db');
+  const tradingDb = openTradingDb(tradingDbPath);
+  const tradingStore = createTradingStore(tradingDb.db);
+  const dexRegistry = createDexRegistry();
+  dexRegistry.register(
+    'uniswap-v3',
+    createUniswapV3Adapter({ wallet, publicClient: wallet.publicClient }),
+  );
+  const tradingAdapter = dexRegistry.get(tradingConfig.dexName);
+  let tradingEngine: TradingEngine | undefined;
   const schedulerRef: { current: Scheduler | undefined } = { current: undefined };
   let allowedUserId: number | undefined;
   let botHandle: { stop: () => void } | undefined;
@@ -112,10 +164,56 @@ async function main(): Promise<void> {
       },
       getScheduler: () => schedulerRef.current,
       db,
+      getTradingEngine: () => tradingEngine,
+      tradingStore,
     });
   }
 
   const notifier = compositeNotifier(notifiers);
+
+  if (tradingAdapter) {
+    tradingEngine = createTradingEngine({
+      config: tradingConfig,
+      wallet,
+      adapter: tradingAdapter,
+      store: tradingStore,
+      db: tradingDb.db,
+      notifier,
+    });
+    // Subscribe to watchlist add/replace events; the engine decides whether
+    // to act based on score threshold and current open-position count.
+    notifiers.push({
+      async notify(event) {
+        if (!tradingEngine) return;
+        if (event.type === 'watchlist:add') {
+          await tradingEngine.onWatchlistAdd({
+            address: event.address,
+            symbol: event.symbol,
+            name: event.name,
+            score: event.score,
+          });
+        } else if (event.type === 'watchlist:replace') {
+          await tradingEngine.onWatchlistAdd({
+            address: event.added.address,
+            symbol: event.added.symbol,
+            name: null,
+            score: event.added.score,
+          });
+        }
+      },
+    });
+    if (tradingConfig.enabled) {
+      tradingEngine.start();
+      printInfo(
+        `Trading engine enabled (${tradingConfig.live ? 'LIVE' : 'DRY-RUN'}) on ${tradingAdapter.name} — min score ${tradingConfig.minScore}, size $${tradingConfig.tradeSizeUsdc}, max ${tradingConfig.maxOpenPositions} open.`,
+      );
+    } else {
+      printInfo('Trading engine disabled (TRADING_ENABLED=0). Use /trade-on to start.');
+    }
+  } else {
+    printWarn(`Unknown TRADING_DEX="${tradingConfig.dexName}"; trading engine will not run.`);
+  }
+
   const scheduler = createScheduler({
     dexscreener,
     oracle,
@@ -144,6 +242,13 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     scheduler.stop();
+    if (tradingEngine) {
+      try {
+        tradingEngine.stop();
+      } catch {
+        /* ignore */
+      }
+    }
     if (botHandle) {
       try {
         botHandle.stop();
@@ -161,6 +266,11 @@ async function main(): Promise<void> {
     } catch {
       /* ignore */
     }
+    try {
+      tradingDb.close();
+    } catch {
+      /* ignore */
+    }
   };
   process.once('SIGINT', () => {
     void shutdown();
@@ -169,7 +279,16 @@ async function main(): Promise<void> {
     void shutdown();
   });
 
-  await startRepl({ agent, oracle, wallet, spend, db, getScheduler: () => scheduler });
+  await startRepl({
+    agent,
+    oracle,
+    wallet,
+    spend,
+    db,
+    getScheduler: () => scheduler,
+    getTradingEngine: () => tradingEngine,
+    tradingStore,
+  });
   await shutdown();
 }
 

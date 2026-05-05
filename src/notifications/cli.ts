@@ -9,6 +9,9 @@ export function createCliNotifier(): Notifier {
         case 'scan:error':
           printError('scheduler', text);
           return;
+        case 'trade:error':
+          printError('trading', text);
+          return;
         case 'watchlist:remove':
           printWarn(text);
           return;

@@ -28,7 +28,9 @@ This is a Gemini-powered CLI agent that analyzes ERC-20 tokens on Base mainnet (
 
 7. **Schemas** (`src/oracle/schemas.ts`): Zod schemas for oracle responses. All schemas use `.passthrough()` so the client tolerates oracle additions without breaking.
 
-8. **REPL** (`src/repl.ts`): Interactive readline loop that handles slash commands (`/help`, `/balance`, `/spend`, `/receipts`, `/clear`, `/quit`) and forwards user input to the agent.
+8. **REPL** (`src/repl.ts`): Interactive readline loop that handles slash commands (`/help`, `/balance`, `/spend`, `/receipts`, `/positions`, `/trades`, `/trade-on`, `/trade-off`, `/sell`, `/clear`, `/quit`) and forwards user input to the agent.
+
+9. **Trading engine** (`src/trading/`): Optional automated trading engine on Base mainnet. `TRADING_ENABLED=1` enables it; `TRADING_LIVE=1` is required to send real swaps (otherwise dry-run). Buys when a watchlist add/replace event has score ≥ `TRADING_MIN_SCORE`; manages exits via TP / SL / trailing-stop / max-hold (whichever fires first). DEX adapter is pluggable; first impl is Uniswap v3 SwapRouter02 + QuoterV2 on Base, with auto fee-tier discovery. Persists `positions` and `trades` to a separate SQLite DB at `TRADING_DB_PATH` (default `./data/trading.db`); the watchlist DB is untouched.
 
 **Key invariant**: The spend tracker is checked *before* each API call. When the cap would be exceeded, the tool returns `spend_cap_exceeded` and the call is not made. This is a client-side safety rail, not enforced by the server.
 

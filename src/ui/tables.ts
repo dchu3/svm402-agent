@@ -158,6 +158,12 @@ const SLASH_ROWS: HelpRow[] = [
   { cmd: '/watchlist', desc: 'Show the current curated watchlist (max 10)' },
   { cmd: '/scan', desc: 'Run a watchlist scan now (on demand, outside schedule)' },
   { cmd: '/scheduler [on|off]', desc: 'Show or toggle the periodic scanner' },
+  { cmd: '/positions', desc: 'Show open trading positions' },
+  { cmd: '/trades', desc: 'Show recent trades (last 20)' },
+  { cmd: '/trade-on', desc: 'Enable the trading engine (dry-run unless TRADING_LIVE=1)' },
+  { cmd: '/trade-off', desc: 'Disable the trading engine' },
+  { cmd: '/trade-status', desc: 'Show trading engine config and open count' },
+  { cmd: '/sell <addr>', desc: 'Manually close an open position' },
   { cmd: '/clear', desc: 'Reset Gemini chat history (does not refund spend)' },
   { cmd: '/quit, /exit', desc: 'Leave the REPL' },
 ];

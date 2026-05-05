@@ -6,6 +6,8 @@ import type { Wallet } from './wallet.js';
 import type { SpendTracker } from './oracle/handlers.js';
 import type { WatchlistDb } from './watchlist/db.js';
 import type { Scheduler } from './scheduler/index.js';
+import type { TradingEngine } from './trading/engine.js';
+import type { TradingStore } from './trading/store.js';
 import { summarizeWatchlist } from './notifications/index.js';
 import { buildPrompt } from './ui/prompt.js';
 import {
@@ -31,6 +33,8 @@ export interface ReplDeps {
   spend: SpendTracker;
   db?: WatchlistDb;
   getScheduler?: () => Scheduler | undefined;
+  getTradingEngine?: () => TradingEngine | undefined;
+  tradingStore?: TradingStore;
 }
 
 const ELEVATED_TOP10_PCT = 30;
@@ -235,6 +239,66 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
         } else {
           printInfo(`scheduler ${sched.isRunning() ? 'running' : 'stopped'}${sched.isScanning() ? ' (scanning…)' : ''}`);
         }
+      }
+      refreshPrompt();
+      rl.prompt();
+      continue;
+    }
+    if (
+      line === '/positions' ||
+      line === '/trades' ||
+      line === '/trade-on' ||
+      line === '/trade-off' ||
+      line === '/trade-status' ||
+      line.startsWith('/sell ')
+    ) {
+      const engine = deps.getTradingEngine?.();
+      const store = deps.tradingStore;
+      if (!engine || !store) {
+        printError('trading engine not configured.');
+      } else if (line === '/positions') {
+        const open = store.listOpen();
+        if (open.length === 0) {
+          printInfo('no open positions.');
+        } else {
+          for (const p of open) {
+            const tag = p.dryRun ? '[dry-run]' : '[live]';
+            const held = ((Date.now() - p.openedAt) / 60000).toFixed(1);
+            output.write(
+              `  ${tag} ${p.symbol ?? p.address.slice(0, 10)} (${p.address}) — entry $${p.entryPriceUsd.toExponential(3)} · size $${p.entryAmountUsdc.toFixed(2)} · peak $${p.highestPriceUsd.toExponential(3)} · held ${held}m · ${p.dex}${p.feeTier ? ` ${p.feeTier}bps` : ''}\n`,
+            );
+          }
+        }
+      } else if (line === '/trades') {
+        const trades = store.listTrades(20);
+        if (trades.length === 0) {
+          printInfo('no trades recorded.');
+        } else {
+          for (const t of trades) {
+            const tag = t.dryRun ? '[dry-run]' : '[live]';
+            const tx = t.txHash ? ` tx ${t.txHash.slice(0, 10)}…` : '';
+            const err = t.error ? ` ERROR: ${t.error}` : '';
+            output.write(
+              `  ${tag} ${t.side.toUpperCase()} ${t.positionAddress} @ $${t.priceUsd.toExponential(3)} on ${t.dex}${t.feeTier ? ` ${t.feeTier}bps` : ''}${tx}${err}\n`,
+            );
+          }
+        }
+      } else if (line === '/trade-on') {
+        engine.setEnabled(true);
+        printInfo(`trading engine enabled (${engine.isLive() ? 'LIVE' : 'DRY-RUN'}).`);
+      } else if (line === '/trade-off') {
+        engine.setEnabled(false);
+        printInfo('trading engine disabled.');
+      } else if (line === '/trade-status') {
+        const s = engine.status();
+        printInfo(
+          `trading: ${s.enabled ? 'enabled' : 'disabled'} · ${s.live ? 'LIVE' : 'DRY-RUN'} · ${s.openPositions}/${s.maxOpenPositions} open · size $${s.tradeSizeUsdc} · min score ${s.minScore} · dex ${s.dex} · TP ${s.policy.takeProfitPct}% / SL ${s.policy.stopLossPct}% / trail ${s.policy.trailingStopPct}% / hold ${(s.policy.maxHoldMs / 60000).toFixed(0)}m`,
+        );
+      } else if (line.startsWith('/sell ')) {
+        const arg = line.slice(6).trim();
+        const res = await engine.manualSell(arg);
+        if (res.closed) printInfo(`sell triggered for ${arg}.`);
+        else printError(`sell failed: ${res.error ?? 'unknown_error'}`);
       }
       refreshPrompt();
       rl.prompt();

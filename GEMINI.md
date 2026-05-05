@@ -13,6 +13,7 @@ This project is a Gemini-driven agent that interacts with the `base-token-oracle
   - `src/telegram.ts`: Telegram bot implementation using `telegraf`.
   - `src/scheduler/`: Periodic scanning logic for trending tokens via DexScreener.
   - `src/watchlist/`: Local SQLite database for tracking high-quality tokens.
+  - `src/trading/`: Automated trading engine (Base mainnet, Uniswap v3 first). Dry-run by default; `TRADING_LIVE=1` enables real swaps. Persists positions/trades to a separate SQLite DB (`./data/trading.db`).
 - **Key Features:** Natural language token analysis, real-time USDC micro-payments on Base, periodic trending token scans, and a secure Telegram interface.
 
 ## Building and Running
@@ -50,3 +51,13 @@ This project is a Gemini-driven agent that interacts with the `base-token-oracle
 | `SCHEDULER_ENABLED` | Enable trending scan (1=yes, 0=no) | `1` |
 | `TELEGRAM_BOT_TOKEN` | Token for Telegram bot mode | Optional |
 | `TELEGRAM_ALLOWED_USER_ID` | Authorized user ID for the bot | Optional |
+| `TRADING_ENABLED` | Enable automated trading engine (1=on) | `0` |
+| `TRADING_LIVE` | Send real swaps (else dry-run) | `0` |
+| `TRADING_MIN_SCORE` | Score threshold for auto-buy | `80` |
+| `TRADE_SIZE_USDC` | Fixed USDC entry size per trade | `5` |
+| `MAX_OPEN_POSITIONS` | Cap on concurrent positions | `3` |
+| `TP_PCT` / `SL_PCT` / `TRAILING_STOP_PCT` / `MAX_HOLD_MINUTES` | Exit policy | `50/20/15/1440` |
+| `TRADING_SLIPPAGE_BPS` | Slippage tolerance (bps) | `100` |
+| `TRADING_MONITOR_INTERVAL_SEC` | Monitor cadence (s) | `60` |
+| `TRADING_DEX` | DEX adapter | `uniswap-v3` |
+| `TRADING_DB_PATH` | SQLite path for positions/trades | `./data/trading.db` |
