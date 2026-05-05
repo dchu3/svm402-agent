@@ -4,6 +4,11 @@
 
 An interactive agent where you chat in natural language about Base ERC-20 tokens. Gemini decides which oracle endpoint to call (`/report`), and the client signs a real USDC `transferWithAuthorization` per call via x402 v2.
 
+> ⚠️ **DISCLAIMER:** This is experimental software provided as-is, with no warranties of any kind.
+> Cryptocurrency trading carries significant financial risk — you may lose some or all of your funds.
+> Nothing in this project constitutes financial, investment, or legal advice. **Do your own research (DYOR)** and trade only what you can afford to lose.
+> Use of this software is entirely at your own risk.
+
 > **⚠️ Real money.** Every successful tool call settles real USDC on Base mainnet (chainId 8453). Use the `MAX_SPEND_USDC` cap.
 
 ## Features
