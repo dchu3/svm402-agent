@@ -27,7 +27,7 @@ export interface Wallet {
   usdcBalance(): Promise<{ raw: bigint; formatted: string }>;
 }
 
-export function createWallet(privateKey: string): Wallet {
+export function createWallet(privateKey: string, rpcUrl?: string): Wallet {
   if (!privateKey) {
     throw new Error('PRIVATE_KEY is required.');
   }
@@ -42,7 +42,10 @@ export function createWallet(privateKey: string): Wallet {
 
   const publicClient = createPublicClient({
     chain: base,
-    transport: http(),
+    // viem's http transport retries automatically on 429/5xx when retryCount > 0.
+    // The default public Base RPC (mainnet.base.org) is aggressively rate-limited;
+    // operators should set BASE_RPC_URL to a dedicated provider for live use.
+    transport: http(rpcUrl, { retryCount: 3, retryDelay: 250 }),
   });
 
   return {

@@ -8,6 +8,8 @@ import type { SpendTracker } from './oracle/handlers.js';
 import { formatAtomicUsdc, parseAtomicUsdc } from './util/usdc.js';
 import type { WatchlistDb } from './watchlist/db.js';
 import type { Scheduler } from './scheduler/index.js';
+import type { TradingEngine } from './trading/engine.js';
+import type { TradingStore } from './trading/store.js';
 import { summarizeWatchlist, summarizeWatchlistMarkdown } from './notifications/index.js';
 
 export interface TelegramBotDeps {
@@ -19,11 +21,26 @@ export interface TelegramBotDeps {
   oracle: OracleClient;
   db?: WatchlistDb;
   getScheduler?: () => Scheduler | undefined;
+  getTradingEngine?: () => TradingEngine | undefined;
+  tradingStore?: TradingStore;
   registerNotifier?: (bot: Telegraf) => void;
 }
 
 export async function startTelegramBot(deps: TelegramBotDeps): Promise<{ stop: () => void }> {
   const bot = new Telegraf(deps.token);
+
+  // Global error handler — without this, any uncaught error inside a command
+  // handler (e.g. a Telegram API 400 from a bad parse_mode entity) escapes
+  // through Telegraf's middleware as an unhandled rejection and crashes the
+  // entire process, killing both the REPL and the bot.
+  bot.catch((err, ctx) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    debug('telegram', `handler error in update ${ctx.update?.update_id}: ${msg}`);
+    // Best-effort plain-text apology; ignore any secondary failure.
+    if (ctx.chat) {
+      ctx.reply(`⚠️ Internal error handling that command: ${msg.slice(0, 200)}`).catch(() => undefined);
+    }
+  });
 
   // Authorization Middleware
   bot.use(async (ctx, next) => {
@@ -52,7 +69,6 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<{ stop: (
       '🔹 /scheduler - on | off | status\n' +
       '🔹 /clear - Reset chat history\n' +
       '🔹 /help - Show help message',
-      { parse_mode: 'Markdown' }
     );
   });
 
@@ -195,20 +211,92 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<{ stop: (
   });
 
   bot.command('help', async (ctx) => {
+    // Plain text (no parse_mode) — command names contain underscores
+    // (/trade_on, /trade_off, /trade_status) which Telegram's legacy Markdown
+    // parser interprets as italic delimiters and rejects when unbalanced.
     await ctx.reply(
-      '📖 *HOW TO USE:*\n' +
+      '📖 HOW TO USE:\n' +
       'Just send a 0x-prefixed token address (Base mainnet only) and I will perform a security audit.\n\n' +
-      '💡 *COMMANDS:*\n' +
+      '💡 COMMANDS:\n' +
       '🔹 /balance - Wallet address + USDC balance\n' +
       '🔹 /spend - Session spend vs cap\n' +
       '🔹 /receipts - List settled payments\n' +
       '🔹 /watchlist - Show curated watchlist with scores\n' +
       '🔹 /scan - Run a watchlist scan on demand\n' +
-      '🔹 /scheduler - `on` | `off` | (no arg for status)\n' +
+      '🔹 /scheduler - on | off | (no arg for status)\n' +
+      '🔹 /positions - Show open trading positions\n' +
+      '🔹 /trades - Show recent trades\n' +
+      '🔹 /trade_on | /trade_off - Toggle the trading engine\n' +
+      '🔹 /trade_status - Show engine config\n' +
+      '🔹 /sell <addr> - Manually close a position\n' +
       '🔹 /clear - Reset chat history\n' +
       '🔹 /help - Show this message',
+    );
+  });
+
+  bot.command('positions', async (ctx) => {
+    const store = deps.tradingStore;
+    if (!store) return void await ctx.reply('Trading engine not configured.');
+    const open = store.listOpen();
+    if (open.length === 0) return void await ctx.reply('No open positions.');
+    const lines = open.map((p) => {
+      const tag = p.dryRun ? '[dry-run]' : '[live]';
+      const held = ((Date.now() - p.openedAt) / 60000).toFixed(1);
+      return `${tag} *${p.symbol ?? p.address.slice(0, 10)}* \`${p.address}\`\n  entry $${p.entryPriceUsd.toExponential(3)} · size $${p.entryAmountUsdc.toFixed(2)} · peak $${p.highestPriceUsd.toExponential(3)} · held ${held}m`;
+    });
+    await ctx.reply(lines.join('\n\n'), { parse_mode: 'Markdown' });
+  });
+
+  bot.command('trades', async (ctx) => {
+    const store = deps.tradingStore;
+    if (!store) return void await ctx.reply('Trading engine not configured.');
+    const trades = store.listTrades(20);
+    if (trades.length === 0) return void await ctx.reply('No trades recorded.');
+    const lines = trades.map((t) => {
+      const tag = t.dryRun ? '[dry-run]' : '[live]';
+      const tx = t.txHash ? ` tx \`${t.txHash.slice(0, 10)}…\`` : '';
+      const err = t.error ? ` ERROR: ${t.error}` : '';
+      return `${tag} ${t.side.toUpperCase()} \`${t.positionAddress}\` @ $${t.priceUsd.toExponential(3)}${tx}${err}`;
+    });
+    await ctx.reply(lines.join('\n'), { parse_mode: 'Markdown' });
+  });
+
+  bot.command('trade_on', async (ctx) => {
+    const engine = deps.getTradingEngine?.();
+    if (!engine) return void await ctx.reply('Trading engine not configured.');
+    engine.setEnabled(true);
+    await ctx.reply(`✅ Trading engine enabled (${engine.isLive() ? 'LIVE' : 'DRY-RUN'}).`);
+  });
+
+  bot.command('trade_off', async (ctx) => {
+    const engine = deps.getTradingEngine?.();
+    if (!engine) return void await ctx.reply('Trading engine not configured.');
+    engine.setEnabled(false);
+    await ctx.reply('🛑 Trading engine disabled.');
+  });
+
+  bot.command('trade_status', async (ctx) => {
+    const engine = deps.getTradingEngine?.();
+    if (!engine) return void await ctx.reply('Trading engine not configured.');
+    const s = engine.status();
+    await ctx.reply(
+      `*Trading status*\n` +
+      `state: ${s.enabled ? 'enabled' : 'disabled'} · ${s.live ? 'LIVE' : 'DRY-RUN'}\n` +
+      `open: ${s.openPositions}/${s.maxOpenPositions} · size $${s.tradeSizeUsdc} · min score ${s.minScore}\n` +
+      `dex: ${s.dex}\n` +
+      `policy: TP ${s.policy.takeProfitPct}% / SL ${s.policy.stopLossPct}% / trail ${s.policy.trailingStopPct}% / hold ${(s.policy.maxHoldMs / 60000).toFixed(0)}m`,
       { parse_mode: 'Markdown' }
     );
+  });
+
+  bot.command('sell', async (ctx) => {
+    const engine = deps.getTradingEngine?.();
+    if (!engine) return void await ctx.reply('Trading engine not configured.');
+    const arg = ctx.message.text.split(/\s+/)[1]?.trim();
+    if (!arg) return void await ctx.reply('Usage: /sell <0xAddress>');
+    const res = await engine.manualSell(arg);
+    if (res.closed) await ctx.reply(`✅ Sell triggered for \`${arg}\`.`, { parse_mode: 'Markdown' });
+    else await ctx.reply(`❌ Sell failed: ${res.error ?? 'unknown_error'}`);
   });
 
   bot.on(message('text'), async (ctx) => {
@@ -323,6 +411,12 @@ export async function startTelegramBot(deps: TelegramBotDeps): Promise<{ stop: (
     { command: 'watchlist', description: 'Show curated watchlist' },
     { command: 'scan', description: 'Run a watchlist scan now' },
     { command: 'scheduler', description: 'on | off | status' },
+    { command: 'positions', description: 'Show open trading positions' },
+    { command: 'trades', description: 'Show recent trades' },
+    { command: 'trade_on', description: 'Enable the trading engine' },
+    { command: 'trade_off', description: 'Disable the trading engine' },
+    { command: 'trade_status', description: 'Show trading engine status' },
+    { command: 'sell', description: 'Manually close a position' },
     { command: 'clear', description: 'Reset chat history' },
     { command: 'help', description: 'Show help message' },
   ]);

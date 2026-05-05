@@ -65,6 +65,18 @@ The bot is **strictly private** and will only respond to the authorized user ID.
 | `SCHEDULER_INTERVAL_MINUTES` | no | `60` | How often the scheduler tick runs |
 | `WATCHLIST_MAX_SIZE` | no | `10` | Maximum tokens kept on the curated watchlist |
 | `WATCHLIST_DB_PATH` | no | `./data/watchlist.db` | SQLite path for the watchlist |
+| `BASE_RPC_URL` | no | viem default (`mainnet.base.org`) | Base RPC endpoint; **set to a dedicated provider** (Alchemy/Infura/QuickNode/Ankr) — the public default is rate-limited and will fail during trading |
+| `TRADING_ENABLED` | no | `0` | Enable the automated trading engine |
+| `TRADING_LIVE` | no | `0` | `1` enables real swaps; otherwise dry-run only |
+| `TRADING_MIN_SCORE` | no | `80` | Watchlist score threshold for auto-buy |
+| `TRADE_SIZE_USDC` | no | `5` | Fixed entry size per trade |
+| `MAX_OPEN_POSITIONS` | no | `3` | Cap on concurrently open positions |
+| `TP_PCT` / `SL_PCT` / `TRAILING_STOP_PCT` | no | `50` / `20` / `15` | Exit policy thresholds (%) |
+| `MAX_HOLD_MINUTES` | no | `1440` | Max hold time per position (minutes) |
+| `TRADING_SLIPPAGE_BPS` | no | `100` | Slippage tolerance in basis points |
+| `TRADING_MONITOR_INTERVAL_SEC` | no | `60` | Position monitor cadence |
+| `TRADING_DEX` | no | `uniswap-v3` | DEX adapter to use |
+| `TRADING_DB_PATH` | no | `./data/trading.db` | SQLite path for positions/trades |
 
 ## DexScreener watchlist scheduler
 
@@ -110,12 +122,91 @@ both the CLI and the Telegram bot (when configured).
 | `/watchlist` | Show the curated watchlist with scores and full contract addresses |
 | `/scan` | Run a watchlist scheduler tick on demand |
 | `/scheduler on\|off` | Toggle the periodic scanner (no arg shows status) |
+| `/positions` | Show open trading positions |
+| `/trades` | Show recent trades (last 20) |
+| `/trade-on` / `/trade-off` (REPL) or `/trade_on` / `/trade_off` (Telegram) | Toggle the trading engine |
+| `/trade-status` (REPL) or `/trade_status` (Telegram) | Show trading engine config and open count |
+| `/sell <addr>` | Manually close an open position |
 | `/clear` | Reset the agent's chat history |
 | `/help` | Show the in-bot help message |
 
 Watchlist add/remove/replace notifications include the **full** contract
 address. On Telegram the address is rendered in a monospace span so you can
 tap to copy it directly into another tool.
+
+## Automated trading (Base)
+
+The agent ships with an opt-in **automated trading engine** that swaps USDC
+for tokens on Base mainnet whenever a watchlist add/replace event arrives
+with a score above a configurable threshold. It manages exits via
+take-profit, stop-loss, trailing-stop and max-hold rules.
+
+> ⚠️ **Real money.** When live mode is enabled the engine signs and sends
+> real swaps with the wallet's USDC. Start in dry-run, set conservative
+> sizes, and never run this with a key holding more value than you are
+> willing to lose. There is no MEV protection.
+
+### Modes
+
+- **Disabled** (`TRADING_ENABLED=0`, the default) — engine is not started; no
+  trades are evaluated.
+- **Dry-run** (`TRADING_ENABLED=1`, `TRADING_LIVE=0`) — engine evaluates
+  triggers, records dry-run "trades" and "positions" in the trading DB, and
+  prints/sends notifications, but never sends a transaction.
+- **Live** (`TRADING_ENABLED=1`, `TRADING_LIVE=1`) — engine signs and sends
+  real Uniswap v3 swaps on Base.
+
+### DEX adapter
+
+The first adapter is **Uniswap v3** on Base (SwapRouter02
+`0x2626664c2603336E57B271c5C0b26F421741e481`, QuoterV2
+`0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a`). It probes fee tiers
+`100 / 500 / 3000 / 10000` and picks the best `amountOut`. The DEX is
+pluggable via the `DexAdapter` interface; new venues can be registered in
+`src/trading/dex/index.ts`.
+
+### Configuration (`.env`)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TRADING_ENABLED` | `0` | Master switch for the engine. |
+| `TRADING_LIVE` | `0` | Must be `1` to send real txs; otherwise everything is dry-run. |
+| `TRADING_MIN_SCORE` | `80` | Watchlist score threshold for auto-buy. |
+| `TRADE_SIZE_USDC` | `5` | Fixed entry size per trade (USDC). |
+| `MAX_OPEN_POSITIONS` | `3` | Hard cap on concurrently open positions. |
+| `TP_PCT` | `50` | Take-profit, % above entry. |
+| `SL_PCT` | `20` | Stop-loss, % below entry. |
+| `TRAILING_STOP_PCT` | `15` | Trailing stop, % drawdown from peak (only after peak > entry). |
+| `MAX_HOLD_MINUTES` | `1440` | Max hold time in minutes. |
+| `TRADING_SLIPPAGE_BPS` | `100` | Slippage tolerance in bps (clamped 1..500). |
+| `TRADING_MONITOR_INTERVAL_SEC` | `60` | Position monitor cadence. |
+| `TRADING_DEX` | `uniswap-v3` | DEX adapter name. |
+| `TRADING_DB_PATH` | `./data/trading.db` | SQLite path for positions/trades. |
+
+### Commands
+
+REPL: `/positions`, `/trades`, `/trade-on`, `/trade-off`, `/trade-status`,
+`/sell <0xAddress>`.
+
+Telegram (underscore variants): `/positions`, `/trades`, `/trade_on`,
+`/trade_off`, `/trade_status`, `/sell <0xAddress>`.
+
+### Storage
+
+Positions and trades are persisted to a separate SQLite DB
+(`./data/trading.db` by default). The watchlist DB is untouched. The
+trading DB is in `.gitignore` along with all other `*.db*` files.
+
+### Safety invariants
+
+- Engine refuses to send a transaction unless `TRADING_LIVE=1`.
+- Engine refuses new entries when `MAX_OPEN_POSITIONS` is reached or wallet
+  USDC balance is below the entry size.
+- All addresses go through the same `0x[0-9a-fA-F]{40}` regex and viem
+  checksum that the rest of the agent uses.
+- Slippage is enforced via `amountOutMinimum` derived from the Quoter.
+- `/trade-off` immediately disables further entries; existing positions
+  continue to be monitored and exited per policy.
 
 ## What it does
 

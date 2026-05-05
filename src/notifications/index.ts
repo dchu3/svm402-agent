@@ -36,6 +36,36 @@ export type NotificationEvent =
   | {
       type: 'scan:error';
       message: string;
+    }
+  | {
+      type: 'trade:open';
+      address: string;
+      symbol: string | null;
+      entryPriceUsd: number;
+      entryAmountUsdc: number;
+      dex: string;
+      feeTier: number | null;
+      txHash: string | null;
+      dryRun: boolean;
+    }
+  | {
+      type: 'trade:close';
+      address: string;
+      symbol: string | null;
+      reason: string;
+      entryPriceUsd: number;
+      exitPriceUsd: number;
+      realizedPnlUsd: number;
+      durationMs: number;
+      txHash: string | null;
+      dryRun: boolean;
+    }
+  | {
+      type: 'trade:error';
+      address: string;
+      symbol: string | null;
+      stage: 'open' | 'close' | 'monitor';
+      message: string;
     };
 
 export interface Notifier {
@@ -88,6 +118,26 @@ function buildNotificationPlain(event: NotificationEvent): string {
       return `✅ Scan complete — +${event.added} / -${event.removed} from ${event.candidates} candidate(s) in ${(event.durationMs / 1000).toFixed(1)}s`;
     case 'scan:error':
       return `❌ Scan error: ${event.message}`;
+    case 'trade:open': {
+      const label = event.symbol ?? fmtAddr(event.address);
+      const tag = event.dryRun ? '🧪 DRY-RUN' : '🟢 LIVE';
+      const tx = event.txHash ? `\n   tx ${event.txHash}` : '';
+      const fee = event.feeTier ? ` · ${event.feeTier}bps` : '';
+      return `${tag} BUY ${label} (${event.address}) — $${event.entryAmountUsdc.toFixed(2)} USDC @ ~$${event.entryPriceUsd.toExponential(3)} on ${event.dex}${fee}${tx}`;
+    }
+    case 'trade:close': {
+      const label = event.symbol ?? fmtAddr(event.address);
+      const tag = event.dryRun ? '🧪 DRY-RUN' : '🔴 LIVE';
+      const pnl = event.realizedPnlUsd;
+      const pnlSign = pnl >= 0 ? '+' : '';
+      const tx = event.txHash ? `\n   tx ${event.txHash}` : '';
+      const heldMin = (event.durationMs / 60000).toFixed(1);
+      return `${tag} SELL ${label} (${event.address}) — ${event.reason} · entry $${event.entryPriceUsd.toExponential(3)} → exit $${event.exitPriceUsd.toExponential(3)} · PnL ${pnlSign}$${pnl.toFixed(2)} · held ${heldMin}m${tx}`;
+    }
+    case 'trade:error': {
+      const label = event.symbol ?? fmtAddr(event.address);
+      return `❌ Trading ${event.stage} error for ${label} (${event.address}): ${event.message}`;
+    }
   }
 }
 
