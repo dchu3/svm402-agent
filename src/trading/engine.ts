@@ -73,6 +73,13 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
   let enabled = deps.config.enabled;
   let monitorTimer: NodeJS.Timeout | undefined;
 
+  // In-flight reservation sets serialize entry/exit per address and bound the
+  // concurrent open-count, since async work happens between the SQLite check
+  // and write. Without these, two concurrent watchlist events can both pass
+  // the maxOpenPositions / position-already-open guards and both swap.
+  const opening = new Set<string>();
+  const closing = new Set<string>();
+
   async function notifyError(
     address: string,
     symbol: string | null,
@@ -101,7 +108,11 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
       debug('trading: score below threshold', { score: input.score, min: deps.config.minScore });
       return;
     }
-    if (deps.store.countOpen() >= deps.config.maxOpenPositions) {
+    if (opening.has(address)) {
+      debug('trading: open already in flight', address);
+      return;
+    }
+    if (deps.store.countOpen() + opening.size >= deps.config.maxOpenPositions) {
       logWatchlist('trading: max open positions reached, skipping', {
         address,
         max: deps.config.maxOpenPositions,
@@ -113,133 +124,237 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
       return;
     }
 
-    const tradeSizeAtomic = BigInt(Math.floor(deps.config.tradeSizeUsdc * 10 ** USDC_DECIMALS));
-    if (tradeSizeAtomic <= 0n) {
-      await notifyError(address, input.symbol, 'open', new Error('invalid_trade_size'));
-      return;
-    }
-
-    // Pre-flight: confirm wallet has enough USDC for the trade.
+    opening.add(address);
     try {
-      const { raw } = await deps.wallet.usdcBalance();
-      if (raw < tradeSizeAtomic) {
+      const tradeSizeAtomic = BigInt(Math.floor(deps.config.tradeSizeUsdc * 10 ** USDC_DECIMALS));
+      if (tradeSizeAtomic <= 0n) {
+        await notifyError(address, input.symbol, 'open', new Error('invalid_trade_size'));
+        return;
+      }
+
+      // Pre-flight: confirm wallet has enough USDC for the trade.
+      try {
+        const { raw } = await deps.wallet.usdcBalance();
+        if (raw < tradeSizeAtomic) {
+          await notifyError(
+            address,
+            input.symbol,
+            'open',
+            new Error(
+              `insufficient_usdc: need ${deps.config.tradeSizeUsdc}, have ${(Number(raw) / 1e6).toFixed(4)}`,
+            ),
+          );
+          return;
+        }
+      } catch (err) {
+        await notifyError(address, input.symbol, 'open', err);
+        return;
+      }
+
+      let quote;
+      try {
+        quote = await deps.adapter.quoteUsdcToToken(address, tradeSizeAtomic);
+      } catch (err) {
+        await notifyError(address, input.symbol, 'open', err);
+        return;
+      }
+      if (quote.amountOutAtomic <= 0n) {
+        await notifyError(address, input.symbol, 'open', new Error('zero_quote'));
+        return;
+      }
+      const minOut = applySlippageBps(quote.amountOutAtomic, deps.config.slippageBps);
+
+      // Resolve authoritative ERC-20 decimals from the adapter (cached) BEFORE
+      // sending the swap so we can persist a correct position record.
+      let tokenDecimals = 18;
+      try {
+        tokenDecimals = await deps.adapter.getDecimals(address);
+      } catch (err) {
+        debug('trading: getDecimals failed, defaulting to 18', { address, err: String(err) });
+      }
+
+      // Re-check after the awaits: another caller could have flipped the
+      // engine off, or filled the slot between our entry and now.
+      if (!enabled) {
+        debug('trading: engine disabled mid-open, aborting', address);
+        return;
+      }
+
+      let swap;
+      try {
+        swap = await deps.adapter.swapUsdcForToken({
+          tokenAddress: address,
+          amountInAtomic: tradeSizeAtomic,
+          minAmountOutAtomic: minOut,
+          feeTier: quote.feeTier,
+          dryRun: !live,
+        });
+      } catch (err) {
+        await notifyError(address, input.symbol, 'open', err);
+        return;
+      }
+
+      let position: Position;
+      try {
+        position = deps.store.openPosition({
+          address,
+          symbol: input.symbol,
+          name: input.name,
+          entryPriceUsd: swap.priceUsd,
+          entryAmountUsdc: deps.config.tradeSizeUsdc,
+          tokenAmountAtomic: swap.amountOutAtomic.toString(),
+          tokenDecimals,
+          dex: deps.adapter.name,
+          feeTier: swap.feeTier,
+          dryRun: swap.dryRun,
+        });
+      } catch (err) {
+        // Critical: a real swap may have already executed. Surface the tx
+        // hash in the error so the operator can reconcile manually.
         await notifyError(
           address,
           input.symbol,
           'open',
           new Error(
-            `insufficient_usdc: need ${deps.config.tradeSizeUsdc}, have ${(Number(raw) / 1e6).toFixed(4)}`,
+            `position_record_failed${swap.txHash ? `:tx=${swap.txHash}` : ''}: ${err instanceof Error ? err.message : String(err)}`,
           ),
         );
         return;
       }
-    } catch (err) {
-      await notifyError(address, input.symbol, 'open', err);
-      return;
-    }
 
-    let quote;
-    try {
-      quote = await deps.adapter.quoteUsdcToToken(address, tradeSizeAtomic);
-    } catch (err) {
-      await notifyError(address, input.symbol, 'open', err);
-      return;
-    }
-    if (quote.amountOutAtomic <= 0n) {
-      await notifyError(address, input.symbol, 'open', new Error('zero_quote'));
-      return;
-    }
-    const minOut = applySlippageBps(quote.amountOutAtomic, deps.config.slippageBps);
+      try {
+        deps.store.recordTrade({
+          positionAddress: address,
+          side: 'buy',
+          dex: deps.adapter.name,
+          txHash: swap.txHash,
+          amountInAtomic: tradeSizeAtomic.toString(),
+          amountOutAtomic: swap.amountOutAtomic.toString(),
+          priceUsd: swap.priceUsd,
+          feeTier: swap.feeTier,
+          dryRun: swap.dryRun,
+        });
+      } catch (err) {
+        debug('trading: recordTrade failed (non-fatal)', { address, err: String(err) });
+      }
 
-    let swap;
-    try {
-      swap = await deps.adapter.swapUsdcForToken({
-        tokenAddress: address,
-        amountInAtomic: tradeSizeAtomic,
-        minAmountOutAtomic: minOut,
-        feeTier: quote.feeTier,
-        dryRun: !live,
+      await deps.notifier.notify({
+        type: 'trade:open',
+        address: position.address,
+        symbol: position.symbol,
+        entryPriceUsd: position.entryPriceUsd,
+        entryAmountUsdc: position.entryAmountUsdc,
+        dex: position.dex,
+        feeTier: position.feeTier,
+        txHash: swap.txHash,
+        dryRun: position.dryRun,
       });
-    } catch (err) {
-      await notifyError(address, input.symbol, 'open', err);
-      return;
+    } finally {
+      opening.delete(address);
     }
-
-    // Resolve token decimals from the price helper round-trip; a 1-token
-    // re-quote also confirms the pool can be used for marking later.
-    let tokenDecimals = 18;
-    try {
-      // Use entry quote's price directly; decimals derived from quote ratio
-      // is unreliable. Fall back to ERC20 decimals via adapter cache by
-      // making a 1-unit USDC quote (already done above) — adapter has cached.
-      // We trust the position's priceUsd from the swap result.
-      tokenDecimals = inferDecimalsFromRatio(
-        Number(tradeSizeAtomic),
-        Number(swap.amountOutAtomic),
-        swap.priceUsd,
-      );
-    } catch {
-      // keep default 18
-    }
-
-    let position: Position;
-    try {
-      position = deps.store.openPosition({
-        address,
-        symbol: input.symbol,
-        name: input.name,
-        entryPriceUsd: swap.priceUsd,
-        entryAmountUsdc: deps.config.tradeSizeUsdc,
-        tokenAmountAtomic: swap.amountOutAtomic.toString(),
-        tokenDecimals,
-        dex: deps.adapter.name,
-        feeTier: swap.feeTier,
-        dryRun: swap.dryRun,
-      });
-    } catch (err) {
-      await notifyError(address, input.symbol, 'open', err);
-      return;
-    }
-
-    deps.store.recordTrade({
-      positionAddress: address,
-      side: 'buy',
-      dex: deps.adapter.name,
-      txHash: swap.txHash,
-      amountInAtomic: tradeSizeAtomic.toString(),
-      amountOutAtomic: swap.amountOutAtomic.toString(),
-      priceUsd: swap.priceUsd,
-      feeTier: swap.feeTier,
-      dryRun: swap.dryRun,
-    });
-
-    await deps.notifier.notify({
-      type: 'trade:open',
-      address: position.address,
-      symbol: position.symbol,
-      entryPriceUsd: position.entryPriceUsd,
-      entryAmountUsdc: position.entryAmountUsdc,
-      dex: position.dex,
-      feeTier: position.feeTier,
-      txHash: swap.txHash,
-      dryRun: position.dryRun,
-    });
   }
 
   async function tryClose(
     position: Position,
     reason: ExitReason,
     currentPriceUsd: number,
-  ): Promise<void> {
-    const tokenAtomic = BigInt(position.tokenAmountAtomic);
-    if (tokenAtomic <= 0n) {
-      // Defensive: should never happen for a real position.
+  ): Promise<{ closed: boolean; error?: string }> {
+    // Per-address closing lock: prevents the monitor loop and a manual /sell
+    // from racing two concurrent sells against the same wallet balance.
+    if (closing.has(position.address)) {
+      return { closed: false, error: 'close_in_flight' };
+    }
+    closing.add(position.address);
+    try {
+      // Refuse to "close" a live position when the engine is in dry-run mode:
+      // doing so would mark it closed in the DB without actually selling on
+      // chain, leaving real tokens stranded. Operator must flip back to live
+      // (or sell out-of-band) to exit a live position.
+      if (!position.dryRun && !live) {
+        const message = 'cannot_close_live_position_in_dry_run_mode';
+        await notifyError(position.address, position.symbol, 'close', new Error(message));
+        return { closed: false, error: message };
+      }
+
+      const tokenAtomic = BigInt(position.tokenAmountAtomic);
+      if (tokenAtomic <= 0n) {
+        // Defensive: should never happen for a real position.
+        const closed = deps.store.closePosition({
+          address: position.address,
+          exitReason: reason,
+          exitPriceUsd: currentPriceUsd,
+          realizedPnlUsd: 0,
+        });
+        if (closed) {
+          await deps.notifier.notify({
+            type: 'trade:close',
+            address: closed.address,
+            symbol: closed.symbol,
+            reason,
+            entryPriceUsd: closed.entryPriceUsd,
+            exitPriceUsd: currentPriceUsd,
+            realizedPnlUsd: 0,
+            durationMs: (closed.closedAt ?? Date.now()) - closed.openedAt,
+            txHash: null,
+            dryRun: closed.dryRun,
+          });
+        }
+        return { closed: !!closed };
+      }
+
+      let quote;
+      try {
+        quote = await deps.adapter.quoteTokenToUsdc(
+          position.address,
+          tokenAtomic,
+          position.feeTier ?? undefined,
+        );
+      } catch (err) {
+        await notifyError(position.address, position.symbol, 'close', err);
+        return { closed: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      const minOut = applySlippageBps(quote.amountOutAtomic, deps.config.slippageBps);
+
+      let swap;
+      try {
+        swap = await deps.adapter.swapTokenForUsdc({
+          tokenAddress: position.address,
+          amountInAtomic: tokenAtomic,
+          minAmountOutAtomic: minOut,
+          feeTier: quote.feeTier,
+          dryRun: position.dryRun,
+        });
+      } catch (err) {
+        await notifyError(position.address, position.symbol, 'close', err);
+        return { closed: false, error: err instanceof Error ? err.message : String(err) };
+      }
+
+      const proceedsUsdc = Number(swap.amountOutAtomic) / 10 ** USDC_DECIMALS;
+      const realizedPnlUsd = proceedsUsdc - position.entryAmountUsdc;
+
       const closed = deps.store.closePosition({
         address: position.address,
         exitReason: reason,
-        exitPriceUsd: currentPriceUsd,
-        realizedPnlUsd: 0,
+        exitPriceUsd: swap.priceUsd,
+        realizedPnlUsd,
       });
+
+      try {
+        deps.store.recordTrade({
+          positionAddress: position.address,
+          side: 'sell',
+          dex: deps.adapter.name,
+          txHash: swap.txHash,
+          amountInAtomic: tokenAtomic.toString(),
+          amountOutAtomic: swap.amountOutAtomic.toString(),
+          priceUsd: swap.priceUsd,
+          feeTier: swap.feeTier,
+          dryRun: swap.dryRun,
+        });
+      } catch (err) {
+        debug('trading: recordTrade(sell) failed (non-fatal)', { address: position.address, err: String(err) });
+      }
+
       if (closed) {
         await deps.notifier.notify({
           type: 'trade:close',
@@ -247,78 +362,16 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
           symbol: closed.symbol,
           reason,
           entryPriceUsd: closed.entryPriceUsd,
-          exitPriceUsd: currentPriceUsd,
-          realizedPnlUsd: 0,
+          exitPriceUsd: swap.priceUsd,
+          realizedPnlUsd,
           durationMs: (closed.closedAt ?? Date.now()) - closed.openedAt,
-          txHash: null,
-          dryRun: closed.dryRun,
+          txHash: swap.txHash,
+          dryRun: swap.dryRun,
         });
       }
-      return;
-    }
-
-    let quote;
-    try {
-      quote = await deps.adapter.quoteTokenToUsdc(
-        position.address,
-        tokenAtomic,
-        position.feeTier ?? undefined,
-      );
-    } catch (err) {
-      await notifyError(position.address, position.symbol, 'close', err);
-      return;
-    }
-    const minOut = applySlippageBps(quote.amountOutAtomic, deps.config.slippageBps);
-
-    let swap;
-    try {
-      swap = await deps.adapter.swapTokenForUsdc({
-        tokenAddress: position.address,
-        amountInAtomic: tokenAtomic,
-        minAmountOutAtomic: minOut,
-        feeTier: quote.feeTier,
-        dryRun: position.dryRun || !live,
-      });
-    } catch (err) {
-      await notifyError(position.address, position.symbol, 'close', err);
-      return;
-    }
-
-    const proceedsUsdc = Number(swap.amountOutAtomic) / 10 ** USDC_DECIMALS;
-    const realizedPnlUsd = proceedsUsdc - position.entryAmountUsdc;
-
-    const closed = deps.store.closePosition({
-      address: position.address,
-      exitReason: reason,
-      exitPriceUsd: swap.priceUsd,
-      realizedPnlUsd,
-    });
-
-    deps.store.recordTrade({
-      positionAddress: position.address,
-      side: 'sell',
-      dex: deps.adapter.name,
-      txHash: swap.txHash,
-      amountInAtomic: tokenAtomic.toString(),
-      amountOutAtomic: swap.amountOutAtomic.toString(),
-      priceUsd: swap.priceUsd,
-      feeTier: swap.feeTier,
-      dryRun: swap.dryRun,
-    });
-
-    if (closed) {
-      await deps.notifier.notify({
-        type: 'trade:close',
-        address: closed.address,
-        symbol: closed.symbol,
-        reason,
-        entryPriceUsd: closed.entryPriceUsd,
-        exitPriceUsd: swap.priceUsd,
-        realizedPnlUsd,
-        durationMs: (closed.closedAt ?? Date.now()) - closed.openedAt,
-        txHash: swap.txHash,
-        dryRun: swap.dryRun,
-      });
+      return { closed: !!closed };
+    } finally {
+      closing.delete(position.address);
     }
   }
 
@@ -417,8 +470,13 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
         } catch {
           // fall back to entry price for accounting; close still proceeds
         }
-        await tryClose(pos, 'manual', priceUsd);
-        return { closed: true };
+        const result = await tryClose(pos, 'manual', priceUsd);
+        if (result.closed) return { closed: true };
+        // tryClose already emitted a trade:error notification; surface the
+        // reason here so REPL/Telegram can show why the sell didn't go through.
+        const refreshed = deps.store.get(normalized);
+        if (refreshed?.status === 'closed') return { closed: true };
+        return { closed: false, error: result.error ?? 'close_failed' };
       } catch (err) {
         return { closed: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -437,36 +495,4 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
       };
     },
   };
-}
-
-/**
- * Best-effort token decimals inference from a USDC->token swap result.
- * Given the USDC amount in (atomic, 6 dec), the token amount out (atomic), and
- * the price (USDC per 1 whole token), derive decimals by checking which
- * 10**d makes the numbers consistent. Returns 18 when ambiguous.
- */
-function inferDecimalsFromRatio(
-  usdcAtomicIn: number,
-  tokenAtomicOut: number,
-  priceUsd: number,
-): number {
-  if (
-    !Number.isFinite(usdcAtomicIn) ||
-    !Number.isFinite(tokenAtomicOut) ||
-    !Number.isFinite(priceUsd) ||
-    priceUsd <= 0 ||
-    tokenAtomicOut <= 0
-  ) {
-    return 18;
-  }
-  const usdcUnits = usdcAtomicIn / 1e6;
-  const tokensWhole = usdcUnits / priceUsd;
-  if (tokensWhole <= 0) return 18;
-  const ratio = tokenAtomicOut / tokensWhole;
-  // Find the integer d such that 10**d ≈ ratio.
-  for (const d of [6, 8, 9, 12, 18]) {
-    const expected = 10 ** d;
-    if (ratio > expected * 0.5 && ratio < expected * 2) return d;
-  }
-  return 18;
 }

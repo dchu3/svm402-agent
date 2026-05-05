@@ -179,6 +179,12 @@ export function createTradingStore(db: Database.Database): TradingStore {
     'SELECT * FROM trades WHERE position_address = ? ORDER BY created_at DESC',
   );
 
+  const deletePositionStmt = db.prepare('DELETE FROM positions WHERE address = ?');
+  const openPositionTxn = db.transaction((address: string, hadClosed: boolean, params: Record<string, unknown>) => {
+    if (hadClosed) deletePositionStmt.run(address);
+    insertPositionStmt.run(params);
+  });
+
   return {
     openPosition(input) {
       const address = input.address.toLowerCase();
@@ -187,11 +193,7 @@ export function createTradingStore(db: Database.Database): TradingStore {
       if (existing && existing.status === 'open') {
         throw new Error(`position_already_open:${address}`);
       }
-      if (existing && existing.status === 'closed') {
-        // Drop the historical row; we let the new open take over the PK.
-        db.prepare('DELETE FROM positions WHERE address = ?').run(address);
-      }
-      insertPositionStmt.run({
+      openPositionTxn(address, !!(existing && existing.status === 'closed'), {
         address,
         symbol: input.symbol,
         name: input.name,

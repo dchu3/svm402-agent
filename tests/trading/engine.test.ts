@@ -48,6 +48,7 @@ function makeAdapter(): DexAdapter & { quoteUsdcToToken: ReturnType<typeof vi.fn
       priceUsd: 0.005,
       dryRun: args.dryRun,
     })),
+    getDecimals: vi.fn(async () => 18),
   } as never;
 }
 

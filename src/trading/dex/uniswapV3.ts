@@ -2,7 +2,6 @@ import {
   createWalletClient,
   http,
   encodeFunctionData,
-  decodeFunctionResult,
   parseAbi,
   type Address,
   type Hash,
@@ -181,6 +180,15 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
   ): Promise<{ txHash: Hash; amountOut: bigint }> {
     await ensureAllowance(tokenIn, addresses.swapRouter02 as Address, args.amountInAtomic);
     const recipient = (args.recipient ?? opts.wallet.address) as Address;
+    // Read the recipient's tokenOut balance BEFORE the swap so we can derive
+    // the actual filled amount from the delta. Re-simulating exactInputSingle
+    // post-trade would query a shifted pool and report the wrong amount.
+    const balanceBefore = (await opts.publicClient.readContract({
+      address: tokenOut,
+      abi: ERC20_ABI,
+      functionName: 'balanceOf',
+      args: [recipient],
+    })) as bigint;
     const data = encodeFunctionData({
       abi: ROUTER_ABI,
       functionName: 'exactInputSingle',
@@ -207,39 +215,28 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
     if (receipt.status !== 'success') {
       throw new Error(`swap_reverted:${hash}`);
     }
-    // We can't reliably decode router return value from the receipt without a
-    // log parser, so we re-read the recipient balance delta via the simulator
-    // is not free; instead trust the quote-based minimum and re-quote post-trade.
-    // For accounting we rely on the router's return value via simulateContract:
-    let amountOut: bigint;
-    try {
-      const sim = await opts.publicClient.simulateContract({
-        account: opts.wallet.account,
-        address: addresses.swapRouter02 as Address,
-        abi: ROUTER_ABI,
-        functionName: 'exactInputSingle',
-        args: [
-          {
-            tokenIn,
-            tokenOut,
-            fee: args.feeTier,
-            recipient,
-            amountIn: args.amountInAtomic,
-            amountOutMinimum: args.minAmountOutAtomic,
-            sqrtPriceLimitX96: 0n,
-          },
-        ],
-        value: 0n,
-      });
-      amountOut = sim.result as bigint;
-    } catch {
-      amountOut = args.minAmountOutAtomic;
+    const balanceAfter = (await opts.publicClient.readContract({
+      address: tokenOut,
+      abi: ERC20_ABI,
+      functionName: 'balanceOf',
+      args: [recipient],
+    })) as bigint;
+    const amountOut = balanceAfter > balanceBefore ? balanceAfter - balanceBefore : 0n;
+    if (amountOut < args.minAmountOutAtomic) {
+      // Should never happen: router enforces amountOutMinimum, but guard so
+      // we never persist a falsely-low fill (which would orphan tokens).
+      throw new Error(
+        `swap_balance_delta_below_min: got=${amountOut} min=${args.minAmountOutAtomic} tx=${hash}`,
+      );
     }
     return { txHash: hash, amountOut };
   }
 
   return {
     name: 'uniswap-v3',
+    async getDecimals(tokenAddress) {
+      return getDecimals(toAddress(tokenAddress));
+    },
     async quoteUsdcToToken(tokenAddress, amountUsdcAtomic) {
       const tokenIn = toAddress(USDC.address);
       const tokenOut = toAddress(tokenAddress);
@@ -354,6 +351,3 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
     },
   };
 }
-
-// Suppress unused-import lint for decodeFunctionResult; kept for future log decoding paths.
-void decodeFunctionResult;

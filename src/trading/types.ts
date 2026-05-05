@@ -109,6 +109,8 @@ export interface DexAdapter {
   swapUsdcForToken(args: SwapArgs): Promise<DexSwapResult>;
   /** Execute token -> USDC swap. */
   swapTokenForUsdc(args: SwapArgs): Promise<DexSwapResult>;
+  /** Resolve on-chain decimals for a token (cached). */
+  getDecimals(tokenAddress: string): Promise<number>;
 }
 
 export interface SwapArgs {
