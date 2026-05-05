@@ -65,6 +65,7 @@ The bot is **strictly private** and will only respond to the authorized user ID.
 | `SCHEDULER_INTERVAL_MINUTES` | no | `60` | How often the scheduler tick runs |
 | `WATCHLIST_MAX_SIZE` | no | `10` | Maximum tokens kept on the curated watchlist |
 | `WATCHLIST_DB_PATH` | no | `./data/watchlist.db` | SQLite path for the watchlist |
+| `BASE_RPC_URL` | no | viem default (`mainnet.base.org`) | Base RPC endpoint; **set to a dedicated provider** (Alchemy/Infura/QuickNode/Ankr) — the public default is rate-limited and will fail during trading |
 | `TRADING_ENABLED` | no | `0` | Enable the automated trading engine |
 | `TRADING_LIVE` | no | `0` | `1` enables real swaps; otherwise dry-run only |
 | `TRADING_MIN_SCORE` | no | `80` | Watchlist score threshold for auto-buy |

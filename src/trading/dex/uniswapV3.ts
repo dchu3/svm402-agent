@@ -39,6 +39,37 @@ const ERC20_ABI = parseAbi([
   'function approve(address spender, uint256 amount) returns (bool)',
 ]);
 
+/**
+ * Retry an RPC read on transient rate-limit / network errors with
+ * exponential backoff. Public Base RPC endpoints are aggressively throttled,
+ * and a single 429 should not abort an entry/exit decision when the next
+ * request a few hundred ms later will succeed.
+ */
+function isRateLimitError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /over rate limit|rate.?limit|429|too many requests|request timed out/i.test(msg);
+}
+
+async function withRpcRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  attempts = 4,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isRateLimitError(err) || i === attempts - 1) throw err;
+      const delayMs = 300 * 2 ** i + Math.floor(Math.random() * 150);
+      debug('uniswap-v3 rpc retry', { label, attempt: i + 1, delayMs, err: String(err).slice(0, 200) });
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
 interface UniswapV3AdapterOptions {
   wallet: Wallet;
   publicClient: PublicClient;
@@ -61,11 +92,15 @@ function makeDecimalsCache(publicClient: PublicClient): (token: Address) => Prom
     const key = token.toLowerCase();
     const cached = cache.get(key);
     if (cached !== undefined) return cached;
-    const decimals = (await publicClient.readContract({
-      address: token,
-      abi: ERC20_ABI,
-      functionName: 'decimals',
-    })) as number;
+    const decimals = (await withRpcRetry(
+      () =>
+        publicClient.readContract({
+          address: token,
+          abi: ERC20_ABI,
+          functionName: 'decimals',
+        }),
+      `decimals(${token})`,
+    )) as number;
     cache.set(key, decimals);
     return decimals;
   };
@@ -99,7 +134,7 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
   const walletClient: WalletClient = createWalletClient({
     account: opts.wallet.account,
     chain: base,
-    transport: http(opts.rpcUrl),
+    transport: http(opts.rpcUrl, { retryCount: 3, retryDelay: 250 }),
   });
 
   async function quoteSingle(
@@ -109,20 +144,24 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
     feeTier: number,
   ): Promise<bigint | null> {
     try {
-      const result = (await opts.publicClient.readContract({
-        address: addresses.quoterV2 as Address,
-        abi: QUOTER_ABI,
-        functionName: 'quoteExactInputSingle',
-        args: [
-          {
-            tokenIn,
-            tokenOut,
-            amountIn,
-            fee: feeTier,
-            sqrtPriceLimitX96: 0n,
-          },
-        ],
-      })) as readonly [bigint, bigint, number, bigint];
+      const result = (await withRpcRetry(
+        () =>
+          opts.publicClient.readContract({
+            address: addresses.quoterV2 as Address,
+            abi: QUOTER_ABI,
+            functionName: 'quoteExactInputSingle',
+            args: [
+              {
+                tokenIn,
+                tokenOut,
+                amountIn,
+                fee: feeTier,
+                sqrtPriceLimitX96: 0n,
+              },
+            ],
+          }),
+        `quoter(${tokenIn}->${tokenOut}@${feeTier})`,
+      )) as readonly [bigint, bigint, number, bigint];
       return result[0];
     } catch (err) {
       debug('uniswap-v3 quoter miss', { tokenIn, tokenOut, feeTier, err: String(err) });

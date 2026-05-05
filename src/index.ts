@@ -82,7 +82,9 @@ async function main(): Promise<void> {
   const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
   const telegramAllowedUser = process.env.TELEGRAM_ALLOWED_USER_ID;
 
-  const wallet = createWallet(privateKey);
+  const baseRpcUrl = (process.env.BASE_RPC_URL ?? '').trim() || undefined;
+
+  const wallet = createWallet(privateKey, baseRpcUrl);
   const oracle = createOracleClient({ baseUrl: oracleUrl, wallet });
   const spend = createSpendTracker(cap);
   const agent = createAgent({ apiKey: geminiApiKey, model, oracle, spend });
@@ -132,7 +134,7 @@ async function main(): Promise<void> {
   const dexRegistry = createDexRegistry();
   dexRegistry.register(
     'uniswap-v3',
-    createUniswapV3Adapter({ wallet, publicClient: wallet.publicClient }),
+    createUniswapV3Adapter({ wallet, publicClient: wallet.publicClient, rpcUrl: baseRpcUrl }),
   );
   const tradingAdapter = dexRegistry.get(tradingConfig.dexName);
   let tradingEngine: TradingEngine | undefined;
