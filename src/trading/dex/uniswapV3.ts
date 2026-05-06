@@ -182,7 +182,7 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
     const results = await Promise.allSettled(
       tiers.map(async (tier) => {
         const out = await quoteSingle(tokenIn, tokenOut, amountIn, tier);
-        if (out === null || out <= 0n) throw new Error('no_quote');
+        if (out === null || out <= 0n) throw new Error(`no_quote_tier_${tier}`);
         return { feeTier: tier, amountOut: out };
       }),
     );
