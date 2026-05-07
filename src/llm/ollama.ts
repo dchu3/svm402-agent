@@ -43,11 +43,15 @@ export interface OllamaProviderOptions extends ProviderDeps {
 const TOOLS_JSON = toJsonSchemaTools(TOOL_DECLARATIONS);
 
 function normalizeArgs(raw: unknown): Record<string, unknown> {
-  if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
   if (typeof raw === 'string') {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
     } catch {
       /* fall through */
     }
@@ -78,29 +82,33 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
   }
 
   async function send(message: string, hooks?: SendHooks): Promise<string> {
-    messages.push({ role: 'user', content: message });
+    // Build the next-turn messages in a scratch array so a failed request or
+    // a hop-cap abort doesn't leave a partial turn in persistent history.
+    const pending: OllamaMessage[] = [{ role: 'user', content: message }];
 
     let safetyHops = 0;
     for (;;) {
       const response = await callOllama({
         model: opts.model,
-        messages,
+        messages: [...messages, ...pending],
         tools: TOOLS_JSON,
         stream: false,
       });
       const msg = response.message ?? { role: 'assistant', content: '' };
       const toolCalls = msg.tool_calls ?? [];
-      messages.push({
+      pending.push({
         role: 'assistant',
         content: msg.content ?? '',
         ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
       });
 
       if (toolCalls.length === 0) {
+        messages.push(...pending);
         return msg.content ?? '';
       }
 
       if (++safetyHops > MAX_TOOL_HOPS) {
+        // Discard the aborted turn; do not pollute future history.
         return '[agent stopped: too many tool-call hops]';
       }
 
@@ -108,7 +116,7 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
         const name = call.function?.name ?? '';
         const args = normalizeArgs(call.function?.arguments);
         const resolved = await dispatchToolCall(name, args, opts, hooks);
-        messages.push({
+        pending.push({
           role: 'tool',
           tool_name: name,
           content: JSON.stringify(resolved.result),

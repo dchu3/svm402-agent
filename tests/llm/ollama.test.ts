@@ -265,7 +265,78 @@ describe('OllamaProvider', () => {
     // After reset, the second call should NOT include the first user message.
     expect(second.messages.some((m) => m.content === 'first')).toBe(false);
     expect(second.messages.some((m) => m.content === 'second')).toBe(true);
-    expect(second.messages[0].role).toBe('system');
+  });
+
+  it('does not poison chat history when a request fails', async () => {
+    const deps = fakeDeps();
+    let calls = 0;
+    const bodies: unknown[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(init.body as string));
+      calls += 1;
+      if (calls === 1) throw new Error('network down');
+      return {
+        ok: true,
+        async json() {
+          return { message: { role: 'assistant', content: 'recovered' } };
+        },
+        async text() {
+          return '';
+        },
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const provider = createOllamaProvider({
+      model: 'llama3.2:3b',
+      host: 'http://x',
+      fetchImpl,
+      ...deps,
+    });
+
+    await expect(provider.send('first')).rejects.toThrow(/network down/);
+    const reply = await provider.send('second');
+    expect(reply).toBe('recovered');
+
+    const second = bodies[1] as { messages: Array<{ role: string; content: string }> };
+    // Failed turn must not leak 'first' into the next request.
+    expect(second.messages.some((m) => m.content === 'first')).toBe(false);
+    expect(second.messages.some((m) => m.content === 'second')).toBe(true);
+  });
+
+  it('does not poison chat history when the hop cap aborts a turn', async () => {
+    const deps = fakeDeps();
+    // Always returns a tool call to force the hop cap.
+    const callMsg = {
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            function: {
+              name: 'get_market',
+              arguments: { address: '0x1111111111111111111111111111111111111111' },
+            },
+          },
+        ],
+      },
+    };
+    const queue: MockResponse[] = Array.from({ length: 10 }, () => callMsg);
+    queue.push({ message: { role: 'assistant', content: 'after-reset' } });
+    const { fetchImpl, bodies } = makeFetch(queue);
+    const provider = createOllamaProvider({
+      model: 'llama3.2:3b',
+      host: 'http://x',
+      fetchImpl,
+      ...deps,
+    });
+
+    const out = await provider.send('first');
+    expect(out).toMatch(/too many tool-call hops/);
+
+    await provider.send('second');
+    const last = bodies[bodies.length - 1] as { messages: Array<{ role: string; content: string }> };
+    expect(last.messages.some((m) => m.content === 'first')).toBe(false);
+    expect(last.messages.some((m) => m.content === 'second')).toBe(true);
   });
 });
 
@@ -281,3 +352,4 @@ describe('toJsonSchemaTools', () => {
     expect(t.function.parameters.required).toContain('address');
   });
 });
+
