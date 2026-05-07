@@ -168,6 +168,7 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
   async function readNdjsonStream(
     body: ReadableStream<Uint8Array>,
     onChunk?: (delta: string) => void,
+    onFrame?: () => void,
   ): Promise<OllamaChatResponse> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
@@ -189,6 +190,13 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
       }
       if (chunk.error) {
         throw new Error(`ollama_error: ${chunk.error}`);
+      }
+      if (onFrame) {
+        try {
+          onFrame();
+        } catch {
+          // never let a UI hook break the stream
+        }
       }
       const m = chunk.message;
       if (m) {
@@ -277,11 +285,12 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
     debug(
       `ollama POST ${url} model=${String(body.model ?? '')} messages=${msgCount} tools=${toolCount} stream=${stream}`,
     );
+    let firstFrameAt: number | null = null;
     let firstChunkAt: number | null = null;
     const stallTimer = setTimeout(() => {
-      if (firstChunkAt === null) {
+      if (firstFrameAt === null) {
         process.stderr.write(
-          `[ollama] WARN no chunk after 30s url=${url} model=${String(body.model ?? '')} ` +
+          `[ollama] WARN no frame after 30s url=${url} model=${String(body.model ?? '')} ` +
             `messages=${msgCount} tools=${toolCount}\n`,
         );
       }
@@ -315,13 +324,20 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
         throw new Error('ollama_stream_failed: response has no body');
       }
       try {
-        const result = await readNdjsonStream(res.body, (delta) => {
-          if (firstChunkAt === null) firstChunkAt = Date.now();
-          options.onChunk?.(delta);
-        });
+        const result = await readNdjsonStream(
+          res.body,
+          (delta) => {
+            if (firstChunkAt === null) firstChunkAt = Date.now();
+            options.onChunk?.(delta);
+          },
+          () => {
+            if (firstFrameAt === null) firstFrameAt = Date.now();
+          },
+        );
         clearTimeout(stallTimer);
         debug(
           `ollama done url=${url} elapsedMs=${Date.now() - startedAt} ` +
+            `firstFrameMs=${firstFrameAt === null ? 'none' : firstFrameAt - startedAt} ` +
             `firstChunkMs=${firstChunkAt === null ? 'none' : firstChunkAt - startedAt} ` +
             `contentLen=${result.message?.content?.length ?? 0}`,
         );
