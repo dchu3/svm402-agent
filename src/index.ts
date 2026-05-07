@@ -87,6 +87,18 @@ async function main(): Promise<void> {
       ? (process.env.OLLAMA_HOST ?? 'http://localhost:11434').trim() || 'http://localhost:11434'
       : undefined;
 
+  const ollamaRequestTimeoutMs = (() => {
+    if (provider !== 'ollama') return undefined;
+    const raw = (process.env.OLLAMA_REQUEST_TIMEOUT_MS ?? '').trim();
+    if (raw === '') return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      printError('OLLAMA_REQUEST_TIMEOUT_MS must be a positive number (ms).');
+      process.exit(1);
+    }
+    return n;
+  })();
+
   const explicitModel = (process.env.LLM_MODEL ?? '').trim();
   const model =
     explicitModel ||
@@ -122,6 +134,7 @@ async function main(): Promise<void> {
     model,
     geminiApiKey,
     ollamaHost,
+    ollamaRequestTimeoutMs,
     oracle,
     spend,
   });

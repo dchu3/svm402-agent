@@ -48,18 +48,29 @@ function makeFetch(responses: MockResponse[]): {
   let i = 0;
   const fetchImpl = (async (_url: string, init?: RequestInit) => {
     bodies.push(JSON.parse(String(init?.body)));
-    const body = responses[i++] ?? { message: { role: 'assistant', content: '' } };
+    const reply = responses[i++] ?? { message: { role: 'assistant', content: '' } };
+    // Encode the reply as a single NDJSON line so the streaming reader
+    // treats this as a complete one-chunk stream with done:true.
+    const line = JSON.stringify({ ...reply, done: true }) + '\n';
+    const encoded = new TextEncoder().encode(line);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoded);
+        controller.close();
+      },
+    });
     return {
       ok: true,
       status: 200,
       statusText: 'OK',
+      body,
       async json() {
-        return body;
+        return reply;
       },
       async text() {
-        return '';
+        return line;
       },
-    } as Response;
+    } as unknown as Response;
   }) as unknown as typeof fetch;
   return { fetchImpl, bodies };
 }
@@ -92,7 +103,7 @@ describe('OllamaProvider', () => {
     expect(out).toBe('hi');
     const body = bodies[0] as { tools: unknown[]; model: string; messages: unknown[]; stream: boolean };
     expect(body.model).toBe('llama3.2:3b');
-    expect(body.stream).toBe(false);
+    expect(body.stream).toBe(true);
     expect(Array.isArray(body.tools)).toBe(true);
     expect(body.tools).toEqual(toJsonSchemaTools(TOOL_DECLARATIONS));
     // First message is system, second is the user prompt.
@@ -275,13 +286,23 @@ describe('OllamaProvider', () => {
       bodies.push(JSON.parse(init.body as string));
       calls += 1;
       if (calls === 1) throw new Error('network down');
+      const line = JSON.stringify({ message: { role: 'assistant', content: 'recovered' }, done: true }) + '\n';
+      const encoded = new TextEncoder().encode(line);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoded);
+          controller.close();
+        },
+      });
       return {
         ok: true,
+        status: 200,
+        body,
         async json() {
           return { message: { role: 'assistant', content: 'recovered' } };
         },
         async text() {
-          return '';
+          return line;
         },
       } as unknown as Response;
     }) as unknown as typeof fetch;

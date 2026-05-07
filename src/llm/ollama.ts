@@ -38,6 +38,12 @@ export interface OllamaProviderOptions extends ProviderDeps {
   host?: string;
   /** Override fetch — useful in tests. */
   fetchImpl?: typeof fetch;
+  /**
+   * Per-request timeout (ms) applied via AbortSignal.timeout. Protects the
+   * agent from a truly hung Ollama server while still allowing slow CPU
+   * inference to run for many minutes. Defaults to 30 minutes.
+   */
+  requestTimeoutMs?: number;
 }
 
 interface OllamaTagsResponse {
@@ -149,20 +155,136 @@ function normalizeArgs(raw: unknown): Record<string, unknown> {
 export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
   const host = (opts.host ?? 'http://localhost:11434').replace(/\/+$/, '');
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const requestTimeoutMs = opts.requestTimeoutMs ?? 30 * 60 * 1000;
 
   let messages: OllamaMessage[] = [{ role: 'system', content: SYSTEM_INSTRUCTION }];
 
-  async function callOllama(body: Record<string, unknown>): Promise<OllamaChatResponse> {
+  async function readNdjsonStream(
+    body: ReadableStream<Uint8Array>,
+  ): Promise<OllamaChatResponse> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let content = '';
+    let toolCalls: OllamaToolCall[] | undefined;
+    let lastRole = 'assistant';
+    let done = false;
+
+    const consumeLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      let chunk: OllamaChatResponse;
+      try {
+        chunk = JSON.parse(trimmed) as OllamaChatResponse;
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        throw new Error(`ollama_stream_parse_failed: ${reason}; line=${trimmed.slice(0, 200)}`);
+      }
+      if (chunk.error) {
+        throw new Error(`ollama_error: ${chunk.error}`);
+      }
+      const m = chunk.message;
+      if (m) {
+        if (m.role) lastRole = m.role;
+        if (typeof m.content === 'string') content += m.content;
+        if (m.tool_calls && m.tool_calls.length > 0) {
+          toolCalls = (toolCalls ?? []).concat(m.tool_calls);
+        }
+      }
+      if (chunk.done) done = true;
+    };
+
+    try {
+      for (;;) {
+        const { value, done: streamDone } = await reader.read();
+        if (value) {
+          buffer += decoder.decode(value, { stream: true });
+          let nl = buffer.indexOf('\n');
+          while (nl !== -1) {
+            const line = buffer.slice(0, nl);
+            buffer = buffer.slice(nl + 1);
+            consumeLine(line);
+            nl = buffer.indexOf('\n');
+          }
+        }
+        if (streamDone) {
+          buffer += decoder.decode();
+          if (buffer.length > 0) consumeLine(buffer);
+          break;
+        }
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // already released or stream errored — ignore
+      }
+    }
+
+    if (!done) {
+      throw new Error(
+        'ollama_stream_failed: stream closed before a final done=true frame was received',
+      );
+    }
+
+    return {
+      message: {
+        role: lastRole,
+        content,
+        ...(toolCalls && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      },
+      done,
+    };
+  }
+
+  async function callOllama(
+    body: Record<string, unknown>,
+    options: { stream?: boolean } = {},
+  ): Promise<OllamaChatResponse> {
     const url = `${host}/api/chat`;
-    const res = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const stream = options.stream ?? true;
+    const signal = AbortSignal.timeout(requestTimeoutMs);
+    const wrapTimeout = (err: unknown): Error => {
+      const e = err as { name?: string } | undefined;
+      if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+        return new Error(
+          `ollama_request_timeout: no response from ${url} within ${requestTimeoutMs}ms. ` +
+            `Increase OLLAMA_REQUEST_TIMEOUT_MS, or check the Ollama server.`,
+        );
+      }
+      return err instanceof Error ? err : new Error(String(err));
+    };
+
+    let res: Response;
+    try {
+      res = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...body, stream }),
+        signal,
+      });
+    } catch (err) {
+      throw wrapTimeout(err);
+    }
+
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new Error(`ollama_request_failed: ${res.status} ${res.statusText} ${text.slice(0, 200)}`);
+      throw new Error(
+        `ollama_request_failed: ${res.status} ${res.statusText} ${text.slice(0, 200)}`,
+      );
     }
+
+    if (stream) {
+      if (!res.body) {
+        throw new Error('ollama_stream_failed: response has no body');
+      }
+      try {
+        return await readNdjsonStream(res.body);
+      } catch (err) {
+        throw wrapTimeout(err);
+      }
+    }
+
     const json = (await res.json()) as OllamaChatResponse;
     if (json.error) throw new Error(`ollama_error: ${json.error}`);
     return json;
@@ -179,7 +301,6 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
         model: opts.model,
         messages: [...messages, ...pending],
         tools: TOOLS_JSON,
-        stream: false,
       });
       const msg = response.message ?? { role: 'assistant', content: '' };
       const toolCalls = msg.tool_calls ?? [];
@@ -231,7 +352,6 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
         { role: 'system', content: EVALUATION_INSTRUCTION },
         { role: 'user', content: prompt },
       ],
-      stream: false,
       format: 'json',
     });
     const text = response.message?.content ?? '';
