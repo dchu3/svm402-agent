@@ -79,10 +79,27 @@ export interface TradeInput {
   error?: string | null;
 }
 
+export type DexRoute =
+  | { kind: 'single'; feeTier: number }
+  | {
+      kind: 'multi';
+      /** Encoded path: tokenIn || fee0(uint24) || hop || fee1(uint24) || tokenOut */
+      path: `0x${string}`;
+      feeTierIn: number;
+      feeTierOut: number;
+      /** Address of the intermediate hop token (e.g. WETH on Base). */
+      hopToken: string;
+    };
+
 export interface DexQuote {
   amountOutAtomic: bigint;
   feeTier: number;
   priceUsd: number;
+  /**
+   * Route selected by the quoter. Optional for back-compat; when omitted the
+   * adapter executes a single-hop swap using `feeTier`.
+   */
+  route?: DexRoute;
 }
 
 export interface DexSwapResult {
@@ -123,6 +140,11 @@ export interface SwapArgs {
   recipient?: `0x${string}`;
   /** Deadline in unix seconds. */
   deadline?: number;
+  /**
+   * Optional route from the quote step. When omitted the adapter performs a
+   * single-hop swap using `feeTier`.
+   */
+  route?: DexRoute;
 }
 
 export interface ExitDecision {
