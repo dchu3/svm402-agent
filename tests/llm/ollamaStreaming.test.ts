@@ -137,4 +137,51 @@ describe('Ollama streaming', () => {
       /ollama_request_timeout.*OLLAMA_REQUEST_TIMEOUT_MS/s,
     );
   });
+
+  it('translates body-phase timeout (during stream read) to ollama_request_timeout', async () => {
+    // fetch resolves immediately with a streaming body that NEVER emits
+    // anything; reader.read() will reject when the AbortSignal fires.
+    const fetchImpl = ((async (_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (!signal) return;
+          const onAbort = () => {
+            const err = new Error('The operation was aborted due to timeout');
+            err.name = 'TimeoutError';
+            controller.error(err);
+          };
+          if (signal.aborted) onAbort();
+          else signal.addEventListener('abort', onAbort);
+        },
+      });
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        body,
+        async json() { throw new Error('not used'); },
+        async text() { return ''; },
+      } as unknown as Response;
+    }) as unknown) as typeof fetch;
+    const provider = createOllamaProvider({
+      model: 'llama3.2',
+      host: 'http://x',
+      fetchImpl,
+      requestTimeoutMs: 25,
+      ...fakeDeps(),
+    });
+    await expect(provider.send('hi')).rejects.toThrow(
+      /ollama_request_timeout.*OLLAMA_REQUEST_TIMEOUT_MS/s,
+    );
+  });
+
+  it('throws ollama_stream_failed when the stream closes before done=true', async () => {
+    const chunks = [
+      JSON.stringify({ message: { role: 'assistant', content: 'partial' }, done: false }) + '\n',
+    ];
+    const fetchImpl = (async () => streamingResponse(chunks)) as unknown as typeof fetch;
+    const provider = createOllamaProvider({ model: 'llama3.2', host: 'http://x', fetchImpl, ...fakeDeps() });
+    await expect(provider.send('hi')).rejects.toThrow(/ollama_stream_failed.*done=true/);
+  });
 });

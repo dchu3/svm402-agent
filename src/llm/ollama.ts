@@ -194,23 +194,37 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
       if (chunk.done) done = true;
     };
 
-    for (;;) {
-      const { value, done: streamDone } = await reader.read();
-      if (value) {
-        buffer += decoder.decode(value, { stream: true });
-        let nl = buffer.indexOf('\n');
-        while (nl !== -1) {
-          const line = buffer.slice(0, nl);
-          buffer = buffer.slice(nl + 1);
-          consumeLine(line);
-          nl = buffer.indexOf('\n');
+    try {
+      for (;;) {
+        const { value, done: streamDone } = await reader.read();
+        if (value) {
+          buffer += decoder.decode(value, { stream: true });
+          let nl = buffer.indexOf('\n');
+          while (nl !== -1) {
+            const line = buffer.slice(0, nl);
+            buffer = buffer.slice(nl + 1);
+            consumeLine(line);
+            nl = buffer.indexOf('\n');
+          }
+        }
+        if (streamDone) {
+          buffer += decoder.decode();
+          if (buffer.length > 0) consumeLine(buffer);
+          break;
         }
       }
-      if (streamDone) {
-        buffer += decoder.decode();
-        if (buffer.length > 0) consumeLine(buffer);
-        break;
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // already released or stream errored — ignore
       }
+    }
+
+    if (!done) {
+      throw new Error(
+        'ollama_stream_failed: stream closed before a final done=true frame was received',
+      );
     }
 
     return {
@@ -230,6 +244,17 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
     const url = `${host}/api/chat`;
     const stream = options.stream ?? true;
     const signal = AbortSignal.timeout(requestTimeoutMs);
+    const wrapTimeout = (err: unknown): Error => {
+      const e = err as { name?: string } | undefined;
+      if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+        return new Error(
+          `ollama_request_timeout: no response from ${url} within ${requestTimeoutMs}ms. ` +
+            `Increase OLLAMA_REQUEST_TIMEOUT_MS, or check the Ollama server.`,
+        );
+      }
+      return err instanceof Error ? err : new Error(String(err));
+    };
+
     let res: Response;
     try {
       res = await fetchImpl(url, {
@@ -239,14 +264,7 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
         signal,
       });
     } catch (err) {
-      const e = err as { name?: string; message?: string } | undefined;
-      if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
-        throw new Error(
-          `ollama_request_timeout: no response from ${url} within ${requestTimeoutMs}ms. ` +
-            `Increase OLLAMA_REQUEST_TIMEOUT_MS, or check the Ollama server.`,
-        );
-      }
-      throw err;
+      throw wrapTimeout(err);
     }
 
     if (!res.ok) {
@@ -260,7 +278,11 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
       if (!res.body) {
         throw new Error('ollama_stream_failed: response has no body');
       }
-      return readNdjsonStream(res.body);
+      try {
+        return await readNdjsonStream(res.body);
+      } catch (err) {
+        throw wrapTimeout(err);
+      }
     }
 
     const json = (await res.json()) as OllamaChatResponse;
