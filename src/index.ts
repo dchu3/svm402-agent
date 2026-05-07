@@ -6,6 +6,7 @@ import { createOracleClient } from './oracle/client.js';
 import { createSpendTracker } from './oracle/handlers.js';
 import { createAgentWithProvider } from './agent.js';
 import type { LlmProviderName } from './llm/index.js';
+import { assertOllamaModelAvailable } from './llm/ollama.js';
 import { startRepl } from './repl.js';
 import { startTelegramBot } from './telegram.js';
 import { renderBanner } from './ui/banner.js';
@@ -91,7 +92,7 @@ async function main(): Promise<void> {
     explicitModel ||
     (provider === 'gemini'
       ? (process.env.GEMINI_MODEL ?? 'gemini-3.1-flash-lite-preview')
-      : (process.env.OLLAMA_MODEL ?? 'llama3.2:3b'));
+      : (process.env.OLLAMA_MODEL ?? 'llama3.2'));
   const cap = Number(process.env.MAX_SPEND_USDC ?? '0.10');
   if (!Number.isFinite(cap) || cap <= 0) {
     printError('MAX_SPEND_USDC must be a positive number.');
@@ -106,6 +107,16 @@ async function main(): Promise<void> {
   const wallet = createWallet(privateKey, baseRpcUrl);
   const oracle = createOracleClient({ baseUrl: oracleUrl, wallet });
   const spend = createSpendTracker(cap);
+
+  if (provider === 'ollama' && ollamaHost) {
+    try {
+      await assertOllamaModelAvailable({ host: ollamaHost, model });
+    } catch (err) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  }
+
   const agent = createAgentWithProvider({
     provider,
     model,

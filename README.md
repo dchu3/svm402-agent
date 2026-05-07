@@ -16,19 +16,19 @@ An interactive agent where you chat in natural language about Base ERC-20 tokens
 - **CLI REPL:** Rich terminal interface with spinners, tables, and a real-time spend bar.
 - **Telegram Bot:** A private, authenticated bot interface to chat with the agent on the go.
 - **x402 Payments:** Automatic signing and settlement of micro-payments for oracle reports.
-- **Pluggable LLM:** Use Google Gemini or a local model via Ollama (e.g. `llama3.2:3b`) — switch with the `LLM_PROVIDER` env var.
+- **Pluggable LLM:** Use Google Gemini or a local model via Ollama (e.g. `llama3.2`) — switch with the `LLM_PROVIDER` env var.
 
 ## Local LLM (Ollama)
 
 Run the agent fully offline (apart from the oracle) using a local Llama model:
 
 ```bash
-ollama pull llama3.2:3b
+ollama pull llama3.2
 ollama serve            # listens on http://localhost:11434
 
 # Then in your .env:
 #   LLM_PROVIDER=ollama
-#   OLLAMA_MODEL=llama3.2:3b
+#   OLLAMA_MODEL=llama3.2
 #   OLLAMA_HOST=http://localhost:11434  # optional; this is the default
 ```
 

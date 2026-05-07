@@ -40,6 +40,93 @@ export interface OllamaProviderOptions extends ProviderDeps {
   fetchImpl?: typeof fetch;
 }
 
+interface OllamaTagsResponse {
+  models?: Array<{ name?: string; model?: string }>;
+}
+
+/**
+ * Pre-flight check: verify that the Ollama server is reachable and that the
+ * configured model tag is actually pulled. Throws an Error with an actionable
+ * message when the host is unreachable or the model is missing.
+ */
+export async function assertOllamaModelAvailable(opts: {
+  host: string;
+  model: string;
+  fetchImpl?: typeof fetch;
+}): Promise<void> {
+  const host = opts.host.replace(/\/+$/, '');
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const url = `${host}/api/tags`;
+
+  let res: Response;
+  try {
+    res = await fetchImpl(url, { method: 'GET' });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Cannot reach Ollama at ${host} (${reason}). Is \`ollama serve\` running, ` +
+        `and is OLLAMA_HOST correct?`,
+    );
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      `Ollama tag listing failed at ${url}: ${res.status} ${res.statusText}. ` +
+        `Is the Ollama server healthy?`,
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Ollama returned a non-JSON response from ${url} (${reason}). ` +
+        `Is OLLAMA_HOST pointing at the Ollama server (and not, e.g., a proxy)?`,
+    );
+  }
+
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `Ollama returned an unexpected payload from ${url} (expected an object with a "models" array). ` +
+        `Is OLLAMA_HOST pointing at the Ollama server?`,
+    );
+  }
+
+  const json = parsed as OllamaTagsResponse;
+  if (json.models !== undefined && !Array.isArray(json.models)) {
+    throw new Error(
+      `Ollama returned an unexpected payload from ${url} ("models" was not an array). ` +
+        `Is OLLAMA_HOST pointing at the Ollama server?`,
+    );
+  }
+  const available = (json.models ?? [])
+    .map((m) => m.name ?? m.model ?? '')
+    .filter((s) => s.length > 0);
+
+  // Ollama tags are exact: "llama3.2" and "llama3.2:3b" are distinct entries.
+  // For the common "<name>" vs "<name>:latest" case we treat the two as
+  // interchangeable in BOTH directions so a user-set `OLLAMA_MODEL=llama3.2`
+  // matches `llama3.2:latest` from /api/tags AND vice versa.
+  const stripLatest = (name: string) => name.replace(/:latest$/, '');
+  const wanted = opts.model;
+  const wantedNorm = stripLatest(wanted);
+  const found = available.some(
+    (name) => name === wanted || stripLatest(name) === wantedNorm,
+  );
+  if (found) return;
+
+  const list = available.length
+    ? available.map((n) => `  - ${n}`).join('\n')
+    : '  (no models pulled)';
+  throw new Error(
+    `Ollama model "${wanted}" is not available on ${host}.\n` +
+      `Pull it with:  ollama pull ${wanted}\n` +
+      `Available models:\n${list}`,
+  );
+}
+
 const TOOLS_JSON = toJsonSchemaTools(TOOL_DECLARATIONS);
 
 function normalizeArgs(raw: unknown): Record<string, unknown> {
