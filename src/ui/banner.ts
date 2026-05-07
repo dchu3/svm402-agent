@@ -4,7 +4,9 @@ import { getTheme } from './theme.js';
 export interface BannerInfo {
   oracleUrl: string;
   walletAddress: string;
+  provider: string;
   model: string;
+  ollamaHost?: string;
   spendCap: number;
   usdcBalance: string | null;
   balanceError?: string;
@@ -25,7 +27,7 @@ export function renderBanner(info: BannerInfo): string {
   const c = t.colors;
 
   const title = c.bold(c.cyan('svm402-agent'));
-  const subtitle = c.dim('Gemini × x402 client for base-token-oracle');
+  const subtitle = c.dim('LLM × x402 client for base-token-oracle');
   const warn = c.yellow(
     `${t.glyphs.warn}  signs REAL USDC payments on Base mainnet (chainId 8453)`,
   );
@@ -37,6 +39,7 @@ export function renderBanner(info: BannerInfo): string {
     `${c.dim(pad('oracle', labelWidth))}${c.white(info.oracleUrl)}`,
     `${c.dim(pad('wallet', labelWidth))}${c.white(info.walletAddress)}`,
     `${c.dim(pad('balance', labelWidth))}${c.green(balText)} ${c.dim('USDC')}`,
+    `${c.dim(pad('provider', labelWidth))}${c.white(info.provider)}${info.ollamaHost ? c.dim(' @ ' + info.ollamaHost) : ''}`,
     `${c.dim(pad('model', labelWidth))}${c.white(info.model)}`,
     `${c.dim(pad('spend cap', labelWidth))}${c.white('$' + info.spendCap.toFixed(3))} ${c.dim('USDC / session')}`,
   ];

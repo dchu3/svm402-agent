@@ -63,7 +63,8 @@ function fakeDex(addresses: string[]): DexscreenerMcpClient {
 
 function fakeAgent(result: EvaluateCandidatesResult): Agent {
   return {
-    chat: {} as Agent['chat'],
+    providerName: 'fake',
+    model: 'fake-model',
     async send() {
       return '';
     },

@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { createWallet } from './wallet.js';
 import { createOracleClient } from './oracle/client.js';
 import { createSpendTracker } from './oracle/handlers.js';
-import { createAgent } from './agent.js';
+import { createAgentWithProvider } from './agent.js';
+import type { LlmProviderName } from './llm/index.js';
 import { startRepl } from './repl.js';
 import { startTelegramBot } from './telegram.js';
 import { renderBanner } from './ui/banner.js';
@@ -71,8 +72,26 @@ function buildTradingConfig(): TradingConfig {
 async function main(): Promise<void> {
   const oracleUrl = process.env.ORACLE_URL ?? 'https://svm402.com';
   const privateKey = requireEnv('PRIVATE_KEY');
-  const geminiApiKey = requireEnv('GEMINI_API_KEY');
-  const model = process.env.GEMINI_MODEL ?? 'gemini-3.1-flash-lite-preview';
+
+  const providerRaw = (process.env.LLM_PROVIDER ?? 'gemini').toLowerCase().trim();
+  if (providerRaw !== 'gemini' && providerRaw !== 'ollama') {
+    printError(`Unsupported LLM_PROVIDER="${providerRaw}". Use "gemini" or "ollama".`);
+    process.exit(1);
+  }
+  const provider = providerRaw as LlmProviderName;
+
+  const geminiApiKey = provider === 'gemini' ? requireEnv('GEMINI_API_KEY') : undefined;
+  const ollamaHost =
+    provider === 'ollama'
+      ? (process.env.OLLAMA_HOST ?? 'http://localhost:11434').trim() || 'http://localhost:11434'
+      : undefined;
+
+  const explicitModel = (process.env.LLM_MODEL ?? '').trim();
+  const model =
+    explicitModel ||
+    (provider === 'gemini'
+      ? (process.env.GEMINI_MODEL ?? 'gemini-3.1-flash-lite-preview')
+      : (process.env.OLLAMA_MODEL ?? 'llama3.2:3b'));
   const cap = Number(process.env.MAX_SPEND_USDC ?? '0.10');
   if (!Number.isFinite(cap) || cap <= 0) {
     printError('MAX_SPEND_USDC must be a positive number.');
@@ -87,7 +106,14 @@ async function main(): Promise<void> {
   const wallet = createWallet(privateKey, baseRpcUrl);
   const oracle = createOracleClient({ baseUrl: oracleUrl, wallet });
   const spend = createSpendTracker(cap);
-  const agent = createAgent({ apiKey: geminiApiKey, model, oracle, spend });
+  const agent = createAgentWithProvider({
+    provider,
+    model,
+    geminiApiKey,
+    ollamaHost,
+    oracle,
+    spend,
+  });
 
   const here = path.dirname(fileURLToPath(import.meta.url));
   const defaultMcpPath = path.resolve(here, '../../dex-screener-mcp/dist/index.js');
@@ -114,7 +140,9 @@ async function main(): Promise<void> {
     renderBanner({
       oracleUrl,
       walletAddress: wallet.address,
+      provider: agent.providerName,
       model,
+      ollamaHost,
       spendCap: cap,
       usdcBalance,
       balanceError,
