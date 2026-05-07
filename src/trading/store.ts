@@ -17,6 +17,13 @@ export interface TradingStore {
   recordTrade(input: TradeInput): Trade;
   listTrades(limit?: number): Trade[];
   listTradesForPosition(address: string): Trade[];
+  /**
+   * Mark a token as non-tradable so the engine skips it on subsequent
+   * watchlist events. Idempotent — repeated marks bump last_seen_at.
+   */
+  markNonTradable(address: string, reason: string): void;
+  isNonTradable(address: string): boolean;
+  clearNonTradable(address: string): void;
 }
 
 interface PositionRow {
@@ -130,6 +137,12 @@ export function createTradingStore(db: Database.Database): TradingStore {
       error TEXT
     );
     CREATE INDEX IF NOT EXISTS trades_position_idx ON trades(position_address);
+    CREATE TABLE IF NOT EXISTS non_tradable_tokens (
+      address TEXT PRIMARY KEY,
+      reason TEXT NOT NULL,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL
+    );
   `);
 
   const insertPositionStmt = db.prepare(`
@@ -177,6 +190,20 @@ export function createTradingStore(db: Database.Database): TradingStore {
   const listTradesStmt = db.prepare('SELECT * FROM trades ORDER BY created_at DESC LIMIT ?');
   const listTradesForPosStmt = db.prepare(
     'SELECT * FROM trades WHERE position_address = ? ORDER BY created_at DESC',
+  );
+
+  const upsertNonTradableStmt = db.prepare(`
+    INSERT INTO non_tradable_tokens (address, reason, first_seen_at, last_seen_at)
+    VALUES (@address, @reason, @now, @now)
+    ON CONFLICT(address) DO UPDATE SET
+      reason = excluded.reason,
+      last_seen_at = excluded.last_seen_at
+  `);
+  const getNonTradableStmt = db.prepare(
+    'SELECT address FROM non_tradable_tokens WHERE address = ?',
+  );
+  const deleteNonTradableStmt = db.prepare(
+    'DELETE FROM non_tradable_tokens WHERE address = ?',
   );
 
   const deletePositionStmt = db.prepare('DELETE FROM positions WHERE address = ?');
@@ -259,6 +286,19 @@ export function createTradingStore(db: Database.Database): TradingStore {
     },
     listTradesForPosition(address) {
       return (listTradesForPosStmt.all(address.toLowerCase()) as TradeRow[]).map(rowToTrade);
+    },
+    markNonTradable(address, reason) {
+      upsertNonTradableStmt.run({
+        address: address.toLowerCase(),
+        reason,
+        now: Date.now(),
+      });
+    },
+    isNonTradable(address) {
+      return Boolean(getNonTradableStmt.get(address.toLowerCase()));
+    },
+    clearNonTradable(address) {
+      deleteNonTradableStmt.run(address.toLowerCase());
     },
   };
 }

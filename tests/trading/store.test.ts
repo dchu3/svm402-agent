@@ -112,4 +112,16 @@ describe('TradingStore', () => {
     expect(bumpHighestPrice(db, ADDR, 1.5)).toBe(1.5);
     expect(store.get(ADDR)?.highestPriceUsd).toBe(1.5);
   });
+
+  it('non-tradable cache: mark / isNonTradable / clear are case-insensitive', () => {
+    const { store } = freshStore();
+    expect(store.isNonTradable(ADDR)).toBe(false);
+    store.markNonTradable(ADDR.toUpperCase(), 'no_pool:USDC->token');
+    expect(store.isNonTradable(ADDR)).toBe(true);
+    expect(store.isNonTradable(ADDR.toUpperCase())).toBe(true);
+    store.markNonTradable(ADDR, 'no_pool:USDC->token');
+    expect(store.isNonTradable(ADDR)).toBe(true);
+    store.clearNonTradable(ADDR);
+    expect(store.isNonTradable(ADDR)).toBe(false);
+  });
 });

@@ -2,6 +2,7 @@ import {
   createWalletClient,
   http,
   encodeFunctionData,
+  encodePacked,
   parseAbi,
   type Address,
   type Hash,
@@ -12,7 +13,7 @@ import { base } from 'viem/chains';
 import type { Wallet } from '../../wallet.js';
 import { USDC } from '../../wallet.js';
 import { debug } from '../../util/log.js';
-import type { DexAdapter, DexSwapResult, SwapArgs } from '../types.js';
+import type { DexAdapter, DexRoute, DexSwapResult, SwapArgs } from '../types.js';
 
 // Uniswap v3 deployments on Base mainnet (chainId 8453).
 // Docs: https://docs.uniswap.org/contracts/v3/reference/deployments/base-deployments
@@ -24,12 +25,33 @@ export const UNISWAP_V3_BASE = {
 
 export const UNISWAP_V3_FEE_TIERS = [100, 500, 3000, 10000] as const;
 
+/**
+ * Canonical WETH on Base. Used as the hop token for USDC<->token routes when
+ * no direct USDC/token v3 pool exists at any fee tier (common for aTokens and
+ * other wrappers, e.g. AWETH).
+ */
+export const WETH_BASE = '0x4200000000000000000000000000000000000006' as const;
+
+/**
+ * Fee-tier pairs we try for the WETH multi-hop fallback. Restricted to the
+ * tiers most likely to have meaningful Base liquidity to keep the quoter call
+ * count bounded (4 pairs * 2 quoter calls per quote pass).
+ */
+const MULTIHOP_FEE_PAIRS: ReadonlyArray<readonly [number, number]> = [
+  [500, 3000],
+  [3000, 500],
+  [3000, 3000],
+  [500, 500],
+];
+
 const QUOTER_ABI = parseAbi([
   'function quoteExactInputSingle((address tokenIn, address tokenOut, uint256 amountIn, uint24 fee, uint160 sqrtPriceLimitX96)) returns (uint256 amountOut, uint160 sqrtPriceX96After, uint32 initializedTicksCrossed, uint256 gasEstimate)',
+  'function quoteExactInput(bytes path, uint256 amountIn) returns (uint256 amountOut, uint160[] sqrtPriceX96AfterList, uint32[] initializedTicksCrossedList, uint256 gasEstimate)',
 ]);
 
 const ROUTER_ABI = parseAbi([
   'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)',
+  'function exactInput((bytes path, address recipient, uint256 amountIn, uint256 amountOutMinimum)) payable returns (uint256 amountOut)',
 ]);
 
 const ERC20_ABI = parseAbi([
@@ -48,6 +70,28 @@ const ERC20_ABI = parseAbi([
 function isRateLimitError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /over rate limit|rate.?limit|429|too many requests|request timed out/i.test(msg);
+}
+
+/**
+ * True when the error is a contract revert (e.g. quoter probing a non-existent
+ * pool), which we want to treat as "no quote at this tier". Network/transport
+ * errors should NOT be classified as reverts so they don't get swallowed and
+ * mistaken for a missing pool (which would falsely poison the non-tradable
+ * cache).
+ */
+function isContractRevert(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const name = (err as { name?: string }).name ?? '';
+  if (
+    name === 'ContractFunctionExecutionError' ||
+    name === 'ContractFunctionRevertedError' ||
+    name === 'CallExecutionError' ||
+    name === 'RawContractError'
+  ) {
+    return true;
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return /execution reverted|reverted with|EVM error|invalid opcode/i.test(msg);
 }
 
 async function withRpcRetry<T>(
@@ -78,6 +122,13 @@ interface UniswapV3AdapterOptions {
   addresses?: Partial<typeof UNISWAP_V3_BASE>;
   /** Override the supported fee tiers. */
   feeTiers?: readonly number[];
+  /**
+   * Override the hop token for the multi-hop fallback. Defaults to WETH on
+   * Base. Tests can pass a different address.
+   */
+  hopToken?: string;
+  /** Override the multi-hop fee-tier pairs. Tests pass a small fixed set. */
+  multihopFeePairs?: ReadonlyArray<readonly [number, number]>;
 }
 
 /**
@@ -129,6 +180,8 @@ function priceFromAmounts(
 export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapter {
   const addresses = { ...UNISWAP_V3_BASE, ...(opts.addresses ?? {}) };
   const feeTiers = opts.feeTiers ?? UNISWAP_V3_FEE_TIERS;
+  const hopToken = (opts.hopToken ?? WETH_BASE) as Address;
+  const multihopFeePairs = opts.multihopFeePairs ?? MULTIHOP_FEE_PAIRS;
   const getDecimals = makeDecimalsCache(opts.publicClient);
 
   const walletClient: WalletClient = createWalletClient({
@@ -136,6 +189,19 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
     chain: base,
     transport: http(opts.rpcUrl, { retryCount: 3, retryDelay: 250 }),
   });
+
+  function encodeMultihopPath(
+    tokenIn: Address,
+    feeIn: number,
+    hop: Address,
+    feeOut: number,
+    tokenOut: Address,
+  ): `0x${string}` {
+    return encodePacked(
+      ['address', 'uint24', 'address', 'uint24', 'address'],
+      [tokenIn, feeIn, hop, feeOut, tokenOut],
+    );
+  }
 
   async function quoteSingle(
     tokenIn: Address,
@@ -164,6 +230,15 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
       )) as readonly [bigint, bigint, number, bigint];
       return result[0];
     } catch (err) {
+      if (!isContractRevert(err)) {
+        debug('uniswap-v3 quoter transient error, propagating', {
+          tokenIn,
+          tokenOut,
+          feeTier,
+          err: String(err).slice(0, 200),
+        });
+        throw err;
+      }
       debug('uniswap-v3 quoter miss', { tokenIn, tokenOut, feeTier, err: String(err) });
       return null;
     }
@@ -188,14 +263,166 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
     );
 
     let best: { feeTier: number; amountOut: bigint } | null = null;
+    let transientErr: unknown = null;
+    let revertCount = 0;
     for (const result of results) {
       if (result.status === 'fulfilled') {
         if (!best || result.value.amountOut > best.amountOut) {
           best = result.value;
         }
+      } else {
+        const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        if (/^no_quote_tier_/.test(msg)) revertCount++;
+        else if (!transientErr) transientErr = result.reason;
       }
     }
-    return best;
+    if (best) return best;
+    // If every probe was a clean revert/empty quote, this is genuinely "no
+    // single-hop pool". If any probe failed transiently AND we have no
+    // confirmed misses to corroborate, propagate so the caller (engine) does
+    // not mistake a temporary RPC failure for a permanently non-tradable
+    // token.
+    if (transientErr && revertCount < tiers.length) throw transientErr;
+    return null;
+  }
+
+  async function quoteMultihop(
+    path: `0x${string}`,
+    amountIn: bigint,
+    label: string,
+  ): Promise<bigint | null> {
+    try {
+      const result = (await withRpcRetry(
+        () =>
+          opts.publicClient.readContract({
+            address: addresses.quoterV2 as Address,
+            abi: QUOTER_ABI,
+            functionName: 'quoteExactInput',
+            args: [path, amountIn],
+          }),
+        `quoter-multihop(${label})`,
+      )) as readonly [bigint, readonly bigint[], readonly number[], bigint];
+      return result[0];
+    } catch (err) {
+      if (!isContractRevert(err)) {
+        debug('uniswap-v3 multihop quoter transient error, propagating', {
+          label,
+          err: String(err).slice(0, 200),
+        });
+        throw err;
+      }
+      debug('uniswap-v3 multihop quoter miss', { label, err: String(err) });
+      return null;
+    }
+  }
+
+  async function findBestMultihop(
+    tokenIn: Address,
+    tokenOut: Address,
+    amountIn: bigint,
+  ): Promise<{
+    feeTierIn: number;
+    feeTierOut: number;
+    amountOut: bigint;
+    path: `0x${string}`;
+  } | null> {
+    if (
+      tokenIn.toLowerCase() === hopToken.toLowerCase() ||
+      tokenOut.toLowerCase() === hopToken.toLowerCase()
+    ) {
+      // Both legs would collapse to a single hop; the single-hop search
+      // already covered this case.
+      return null;
+    }
+    const attempts = multihopFeePairs.map(async ([feeIn, feeOut]) => {
+      const path = encodeMultihopPath(tokenIn, feeIn, hopToken, feeOut, tokenOut);
+      const out = await quoteMultihop(
+        path,
+        amountIn,
+        `${tokenIn}->WETH@${feeIn}->${tokenOut}@${feeOut}`,
+      );
+      if (out === null || out <= 0n) throw new Error(`no_multihop_${feeIn}_${feeOut}`);
+      return { feeTierIn: feeIn, feeTierOut: feeOut, amountOut: out, path };
+    });
+    const results = await Promise.allSettled(attempts);
+    let best: {
+      feeTierIn: number;
+      feeTierOut: number;
+      amountOut: bigint;
+      path: `0x${string}`;
+    } | null = null;
+    let transientErr: unknown = null;
+    let revertCount = 0;
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        if (!best || r.value.amountOut > best.amountOut) best = r.value;
+      } else {
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        if (/^no_multihop_/.test(msg)) revertCount++;
+        else if (!transientErr) transientErr = r.reason;
+      }
+    }
+    if (best) return best;
+    if (transientErr && revertCount < multihopFeePairs.length) throw transientErr;
+    return null;
+  }
+
+  /**
+   * Find the best route from tokenIn to tokenOut. Prefers single-hop pools
+   * (lower gas, simpler path); falls back to a 2-hop path through `hopToken`
+   * (WETH on Base) when no direct pool exists at any tier. Returns null when
+   * no route is found.
+   */
+  async function findBestRoute(
+    tokenIn: Address,
+    tokenOut: Address,
+    amountIn: bigint,
+    preferredTier?: number,
+  ): Promise<
+    | { kind: 'single'; feeTier: number; amountOut: bigint }
+    | {
+        kind: 'multi';
+        feeTierIn: number;
+        feeTierOut: number;
+        amountOut: bigint;
+        path: `0x${string}`;
+      }
+    | null
+  > {
+    const single = await findBestQuote(tokenIn, tokenOut, amountIn, preferredTier);
+    if (single) return { kind: 'single', ...single };
+    const multi = await findBestMultihop(tokenIn, tokenOut, amountIn);
+    if (multi) return { kind: 'multi', ...multi };
+    return null;
+  }
+
+  function routeFromBest(
+    best:
+      | { kind: 'single'; feeTier: number; amountOut: bigint }
+      | {
+          kind: 'multi';
+          feeTierIn: number;
+          feeTierOut: number;
+          amountOut: bigint;
+          path: `0x${string}`;
+        },
+  ): { route: DexRoute; headlineFeeTier: number } {
+    if (best.kind === 'single') {
+      return {
+        route: { kind: 'single', feeTier: best.feeTier },
+        headlineFeeTier: best.feeTier,
+      };
+    }
+    return {
+      route: {
+        kind: 'multi',
+        path: best.path,
+        feeTierIn: best.feeTierIn,
+        feeTierOut: best.feeTierOut,
+        hopToken,
+      },
+      headlineFeeTier: best.feeTierIn,
+    };
   }
 
   async function ensureAllowance(token: Address, spender: Address, amount: bigint): Promise<Hash | null> {
@@ -238,21 +465,36 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
       functionName: 'balanceOf',
       args: [recipient],
     })) as bigint;
-    const data = encodeFunctionData({
-      abi: ROUTER_ABI,
-      functionName: 'exactInputSingle',
-      args: [
-        {
-          tokenIn,
-          tokenOut,
-          fee: args.feeTier,
-          recipient,
-          amountIn: args.amountInAtomic,
-          amountOutMinimum: args.minAmountOutAtomic,
-          sqrtPriceLimitX96: 0n,
-        },
-      ],
-    });
+    const route: DexRoute = args.route ?? { kind: 'single', feeTier: args.feeTier };
+    const data =
+      route.kind === 'multi'
+        ? encodeFunctionData({
+            abi: ROUTER_ABI,
+            functionName: 'exactInput',
+            args: [
+              {
+                path: route.path,
+                recipient,
+                amountIn: args.amountInAtomic,
+                amountOutMinimum: args.minAmountOutAtomic,
+              },
+            ],
+          })
+        : encodeFunctionData({
+            abi: ROUTER_ABI,
+            functionName: 'exactInputSingle',
+            args: [
+              {
+                tokenIn,
+                tokenOut,
+                fee: route.feeTier,
+                recipient,
+                amountIn: args.amountInAtomic,
+                amountOutMinimum: args.minAmountOutAtomic,
+                sqrtPriceLimitX96: 0n,
+              },
+            ],
+          });
     const hash = await walletClient.sendTransaction({
       account: opts.wallet.account,
       chain: base,
@@ -289,7 +531,7 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
     async quoteUsdcToToken(tokenAddress, amountUsdcAtomic) {
       const tokenIn = toAddress(USDC.address);
       const tokenOut = toAddress(tokenAddress);
-      const best = await findBestQuote(tokenIn, tokenOut, amountUsdcAtomic);
+      const best = await findBestRoute(tokenIn, tokenOut, amountUsdcAtomic);
       if (!best) throw new Error('no_pool:USDC->token');
       const decimalsOut = await getDecimals(tokenOut);
       const priceUsd = priceFromAmounts(
@@ -299,12 +541,13 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
         decimalsOut,
         true,
       );
-      return { amountOutAtomic: best.amountOut, feeTier: best.feeTier, priceUsd };
+      const { route, headlineFeeTier } = routeFromBest(best);
+      return { amountOutAtomic: best.amountOut, feeTier: headlineFeeTier, priceUsd, route };
     },
     async quoteTokenToUsdc(tokenAddress, amountTokenAtomic, feeTierHint) {
       const tokenIn = toAddress(tokenAddress);
       const tokenOut = toAddress(USDC.address);
-      const best = await findBestQuote(tokenIn, tokenOut, amountTokenAtomic, feeTierHint);
+      const best = await findBestRoute(tokenIn, tokenOut, amountTokenAtomic, feeTierHint);
       if (!best) throw new Error('no_pool:token->USDC');
       const decimalsIn = await getDecimals(tokenIn);
       const priceUsd = priceFromAmounts(
@@ -314,7 +557,8 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
         decimalsIn,
         true,
       );
-      return { amountOutAtomic: best.amountOut, feeTier: best.feeTier, priceUsd };
+      const { route, headlineFeeTier } = routeFromBest(best);
+      return { amountOutAtomic: best.amountOut, feeTier: headlineFeeTier, priceUsd, route };
     },
     async swapUsdcForToken(args): Promise<DexSwapResult> {
       if (args.dryRun) {

@@ -108,6 +108,13 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
       debug('trading: score below threshold', { score: input.score, min: deps.config.minScore });
       return;
     }
+    if (deps.store.isNonTradable(address)) {
+      // Token previously failed with no_pool (or another non-tradable signal).
+      // Skip silently — we already notified the operator on the first failure
+      // and re-attempting would just spam the same error on every replace.
+      debug('trading: skipping non-tradable token', address);
+      return;
+    }
     if (opening.has(address)) {
       debug('trading: open already in flight', address);
       return;
@@ -155,6 +162,17 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
       try {
         quote = await deps.adapter.quoteUsdcToToken(address, tradeSizeAtomic);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.startsWith('no_pool:')) {
+          // No direct or multi-hop route exists. Mark the token so we don't
+          // retry on subsequent watchlist replace events. The error is still
+          // surfaced to the operator once.
+          try {
+            deps.store.markNonTradable(address, message);
+          } catch (markErr) {
+            debug('trading: markNonTradable failed', { address, err: String(markErr) });
+          }
+        }
         await notifyError(address, input.symbol, 'open', err);
         return;
       }
@@ -187,6 +205,7 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
           amountInAtomic: tradeSizeAtomic,
           minAmountOutAtomic: minOut,
           feeTier: quote.feeTier,
+          route: quote.route,
           dryRun: !live,
         });
       } catch (err) {
@@ -322,6 +341,7 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
           amountInAtomic: tokenAtomic,
           minAmountOutAtomic: minOut,
           feeTier: quote.feeTier,
+          route: quote.route,
           dryRun: position.dryRun,
         });
       } catch (err) {

@@ -119,6 +119,36 @@ describe('TradingEngine.onWatchlistAdd', () => {
     await engine.onWatchlistAdd({ address: '0xnothex', symbol: 'T', name: null, score: 99 });
     expect(adapter.swapUsdcForToken).not.toHaveBeenCalled();
   });
+
+  it('marks a token non-tradable when quote throws no_pool, and skips on subsequent events', async () => {
+    const { engine, store, adapter, notifier } = setup();
+    adapter.quoteUsdcToToken.mockImplementationOnce(async () => {
+      throw new Error('no_pool:USDC->token');
+    });
+    await engine.onWatchlistAdd({ address: ADDR, symbol: 'T', name: null, score: 99 });
+    expect(store.isNonTradable(ADDR)).toBe(true);
+    expect(adapter.swapUsdcForToken).not.toHaveBeenCalled();
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'trade:error', stage: 'open' }),
+    );
+
+    // Second watchlist replace event must short-circuit BEFORE calling the
+    // adapter quoter (and without re-notifying the operator).
+    notifier.notify.mockClear();
+    adapter.quoteUsdcToToken.mockClear();
+    await engine.onWatchlistAdd({ address: ADDR, symbol: 'T', name: null, score: 99 });
+    expect(adapter.quoteUsdcToToken).not.toHaveBeenCalled();
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it('does not mark non-tradable on non-no_pool errors', async () => {
+    const { engine, store, adapter } = setup();
+    adapter.quoteUsdcToToken.mockImplementationOnce(async () => {
+      throw new Error('rpc_timeout');
+    });
+    await engine.onWatchlistAdd({ address: ADDR, symbol: 'T', name: null, score: 99 });
+    expect(store.isNonTradable(ADDR)).toBe(false);
+  });
 });
 
 describe('TradingEngine.manualSell', () => {
