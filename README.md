@@ -30,6 +30,7 @@ ollama serve            # listens on http://localhost:11434
 #   LLM_PROVIDER=ollama
 #   OLLAMA_MODEL=llama3.2
 #   OLLAMA_HOST=http://localhost:11434  # optional; this is the default
+#   OLLAMA_REQUEST_TIMEOUT_MS=1800000   # optional; 30 min wall-clock cap
 ```
 
 GEMINI_API_KEY is not required when `LLM_PROVIDER=ollama`. The selected
