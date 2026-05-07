@@ -184,4 +184,90 @@ describe('Ollama streaming', () => {
     const provider = createOllamaProvider({ model: 'llama3.2', host: 'http://x', fetchImpl, ...fakeDeps() });
     await expect(provider.send('hi')).rejects.toThrow(/ollama_stream_failed.*done=true/);
   });
+
+  it('invokes onStreamChunk for each non-empty content delta in order', async () => {
+    const deltas = ['hel', 'lo ', 'world'];
+    const chunks = [
+      ...deltas.map(
+        (d) => JSON.stringify({ message: { role: 'assistant', content: d }, done: false }) + '\n',
+      ),
+      // empty content delta — should NOT be reported as a chunk
+      JSON.stringify({ message: { role: 'assistant', content: '' }, done: false }) + '\n',
+      JSON.stringify({ message: { role: 'assistant', content: '' }, done: true }) + '\n',
+    ];
+    const fetchImpl = (async () => streamingResponse(chunks)) as unknown as typeof fetch;
+    const provider = createOllamaProvider({
+      model: 'llama3.2',
+      host: 'http://x',
+      fetchImpl,
+      ...fakeDeps(),
+    });
+    const seen: string[] = [];
+    const out = await provider.send('hi', { onStreamChunk: (d) => seen.push(d) });
+    expect(seen).toEqual(deltas);
+    expect(out).toBe('hello world');
+  });
+
+  it('does not let onStreamChunk errors break the stream', async () => {
+    const chunks = [
+      JSON.stringify({ message: { role: 'assistant', content: 'a' }, done: false }) + '\n',
+      JSON.stringify({ message: { role: 'assistant', content: 'b' }, done: true }) + '\n',
+    ];
+    const fetchImpl = (async () => streamingResponse(chunks)) as unknown as typeof fetch;
+    const provider = createOllamaProvider({
+      model: 'llama3.2',
+      host: 'http://x',
+      fetchImpl,
+      ...fakeDeps(),
+    });
+    const out = await provider.send('hi', {
+      onStreamChunk: () => {
+        throw new Error('boom');
+      },
+    });
+    expect(out).toBe('ab');
+  });
+
+  it('omits `tools` from /api/chat when disableTools is true', async () => {
+    let captured: unknown;
+    const chunks = [
+      JSON.stringify({ message: { role: 'assistant', content: 'ok' }, done: true }) + '\n',
+    ];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body ?? '{}'));
+      return streamingResponse(chunks);
+    }) as unknown as typeof fetch;
+    const provider = createOllamaProvider({
+      model: 'llama3.2',
+      host: 'http://x',
+      fetchImpl,
+      disableTools: true,
+      ...fakeDeps(),
+    });
+    await provider.send('hi');
+    const body = captured as Record<string, unknown>;
+    expect(body.tools).toBeUndefined();
+    expect(body.stream).toBe(true);
+  });
+
+  it('includes `tools` by default when disableTools is not set', async () => {
+    let captured: unknown;
+    const chunks = [
+      JSON.stringify({ message: { role: 'assistant', content: 'ok' }, done: true }) + '\n',
+    ];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      captured = JSON.parse(String(init?.body ?? '{}'));
+      return streamingResponse(chunks);
+    }) as unknown as typeof fetch;
+    const provider = createOllamaProvider({
+      model: 'llama3.2',
+      host: 'http://x',
+      fetchImpl,
+      ...fakeDeps(),
+    });
+    await provider.send('hi');
+    const body = captured as Record<string, unknown>;
+    expect(Array.isArray(body.tools)).toBe(true);
+    expect((body.tools as unknown[]).length).toBeGreaterThan(0);
+  });
 });

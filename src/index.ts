@@ -99,6 +99,12 @@ async function main(): Promise<void> {
     return n;
   })();
 
+  const ollamaDisableTools = (() => {
+    if (provider !== 'ollama') return undefined;
+    const raw = (process.env.OLLAMA_DISABLE_TOOLS ?? '').trim().toLowerCase();
+    return raw === '1' || raw === 'true' || raw === 'yes';
+  })();
+
   const explicitModel = (process.env.LLM_MODEL ?? '').trim();
   const model =
     explicitModel ||
@@ -135,6 +141,7 @@ async function main(): Promise<void> {
     geminiApiKey,
     ollamaHost,
     ollamaRequestTimeoutMs,
+    ollamaDisableTools,
     oracle,
     spend,
   });

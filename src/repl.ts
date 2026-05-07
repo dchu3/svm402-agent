@@ -312,8 +312,47 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     }
 
     try {
-      const reply = await deps.agent.send(line, { onToolStart, onToolEnd });
-      printAgent(reply);
+      const startedAt = Date.now();
+      let firstChunk = false;
+      let streamedContent = false;
+      const t = getTheme();
+      const c = t.colors;
+      const clearHeartbeat = (): void => {
+        // \r returns to col 0; \x1b[2K clears the whole line in a TTY.
+        output.write('\r\x1b[2K');
+      };
+      const heartbeat = setInterval(() => {
+        if (firstChunk) return;
+        const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
+        clearHeartbeat();
+        output.write(c.dim(`… still thinking (${elapsedSec}s)`));
+      }, 5000);
+      heartbeat.unref?.();
+      const onStreamChunk = (delta: string): void => {
+        if (!firstChunk) {
+          firstChunk = true;
+          streamedContent = true;
+          clearHeartbeat();
+          output.write(`${t.glyphs.agent}  `);
+        }
+        output.write(c.white(delta));
+      };
+      try {
+        const reply = await deps.agent.send(line, {
+          onToolStart,
+          onToolEnd,
+          onStreamChunk,
+        });
+        clearInterval(heartbeat);
+        if (streamedContent) {
+          output.write('\n');
+        } else {
+          clearHeartbeat();
+          printAgent(reply);
+        }
+      } finally {
+        clearInterval(heartbeat);
+      }
     } catch (err) {
       clearSpinner();
       printError('agent error', err instanceof Error ? err.message : String(err));
