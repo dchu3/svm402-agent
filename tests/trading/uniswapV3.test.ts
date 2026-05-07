@@ -30,6 +30,14 @@ function makeWallet(): Wallet {
   };
 }
 
+function makeRevertError(message: string): Error {
+  // Simulate viem's ContractFunctionExecutionError so the adapter classifies
+  // it as a "no pool" revert rather than a transient RPC error.
+  const err = new Error(`execution reverted: ${message}`);
+  err.name = 'ContractFunctionExecutionError';
+  return err;
+}
+
 /**
  * Build a public client mock whose readContract responds based on the
  * `functionName`. This lets us simulate "single-hop quoter misses, multi-hop
@@ -63,7 +71,7 @@ function makePublicClient(
         ];
         const out = handlers.quoteExactInputSingle?.(params);
         if (out === null || out === undefined) {
-          throw new Error(`no_pool_${params.fee}`);
+          throw makeRevertError(`no_pool_${params.fee}`);
         }
         return [out, 0n, 0, 0n];
       }
@@ -71,7 +79,7 @@ function makePublicClient(
         const [path, amountIn] = args as [string, bigint];
         const out = handlers.quoteExactInput?.({ path, amountIn });
         if (out === null || out === undefined) {
-          throw new Error('no_multihop_pool');
+          throw makeRevertError('no_multihop_pool');
         }
         return [out, [], [], 0n];
       }
@@ -103,15 +111,17 @@ describe('UniswapV3Adapter routing', () => {
         calls.push(`single:${tokenIn}->${tokenOut}@${fee}`);
         return null;
       },
-      // Multi-hop: only the 500/3000 pair has liquidity.
+      // Multi-hop: only the [500, 3000] pair has liquidity. Path layout is
+      // tokenIn(20) || feeIn(3) || hop(20) || feeOut(3) || tokenOut(20).
+      // In the 0x-prefixed lowercase hex string that's:
+      //   feeIn  -> chars 42..47 (after 0x + 20 bytes)
+      //   feeOut -> chars 88..93 (after 0x + 20 + 3 + 20 bytes)
       quoteExactInput: ({ path }) => {
         calls.push(`multi:${path}`);
-        // path encodes feeIn at byte 20..23; we just check it loosely by
-        // hex-substring (uint24 0x0001f4 for 500, 0x000bb8 for 3000).
         const lower = path.toLowerCase();
-        const hasIn500 = lower.includes('0001f4');
-        const hasOut3000 = lower.includes('000bb8');
-        if (hasIn500 && hasOut3000) return 5n * 10n ** 17n;
+        const feeIn = lower.slice(42, 48);
+        const feeOut = lower.slice(88, 94);
+        if (feeIn === '0001f4' && feeOut === '000bb8') return 5n * 10n ** 17n;
         return null;
       },
     });
@@ -165,6 +175,27 @@ describe('UniswapV3Adapter routing', () => {
     );
     // Only single-hop tiers should have been probed.
     expect(seen.length).toBeGreaterThan(0);
+  });
+
+  it('propagates transient RPC errors instead of silently returning no_pool', async () => {
+    // All quoter calls fail with a non-revert (network-style) error. The
+    // adapter must NOT classify this as a missing pool — otherwise the
+    // engine's non-tradable cache would be poisoned by a transient outage.
+    const transient = new Error('HTTP request failed: 503 Service Unavailable');
+    transient.name = 'HttpRequestError';
+    const publicClient: MockPublic = {
+      readContract: vi.fn(async ({ functionName }: { functionName: string }) => {
+        if (functionName === 'decimals') return 18;
+        throw transient;
+      }),
+    };
+    const adapter = createUniswapV3Adapter({
+      wallet: makeWallet(),
+      publicClient: publicClient as never,
+    });
+    await expect(adapter.quoteUsdcToToken(FAKE_TOKEN, 5_000_000n)).rejects.toThrow(
+      /HTTP request failed/,
+    );
   });
 
   it('exports the canonical Base v3 deployment addresses', () => {

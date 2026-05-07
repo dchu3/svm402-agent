@@ -72,6 +72,28 @@ function isRateLimitError(err: unknown): boolean {
   return /over rate limit|rate.?limit|429|too many requests|request timed out/i.test(msg);
 }
 
+/**
+ * True when the error is a contract revert (e.g. quoter probing a non-existent
+ * pool), which we want to treat as "no quote at this tier". Network/transport
+ * errors should NOT be classified as reverts so they don't get swallowed and
+ * mistaken for a missing pool (which would falsely poison the non-tradable
+ * cache).
+ */
+function isContractRevert(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const name = (err as { name?: string }).name ?? '';
+  if (
+    name === 'ContractFunctionExecutionError' ||
+    name === 'ContractFunctionRevertedError' ||
+    name === 'CallExecutionError' ||
+    name === 'RawContractError'
+  ) {
+    return true;
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return /execution reverted|reverted with|EVM error|invalid opcode/i.test(msg);
+}
+
 async function withRpcRetry<T>(
   fn: () => Promise<T>,
   label: string,
@@ -208,6 +230,15 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
       )) as readonly [bigint, bigint, number, bigint];
       return result[0];
     } catch (err) {
+      if (!isContractRevert(err)) {
+        debug('uniswap-v3 quoter transient error, propagating', {
+          tokenIn,
+          tokenOut,
+          feeTier,
+          err: String(err).slice(0, 200),
+        });
+        throw err;
+      }
       debug('uniswap-v3 quoter miss', { tokenIn, tokenOut, feeTier, err: String(err) });
       return null;
     }
@@ -232,14 +263,27 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
     );
 
     let best: { feeTier: number; amountOut: bigint } | null = null;
+    let transientErr: unknown = null;
+    let revertCount = 0;
     for (const result of results) {
       if (result.status === 'fulfilled') {
         if (!best || result.value.amountOut > best.amountOut) {
           best = result.value;
         }
+      } else {
+        const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        if (/^no_quote_tier_/.test(msg)) revertCount++;
+        else if (!transientErr) transientErr = result.reason;
       }
     }
-    return best;
+    if (best) return best;
+    // If every probe was a clean revert/empty quote, this is genuinely "no
+    // single-hop pool". If any probe failed transiently AND we have no
+    // confirmed misses to corroborate, propagate so the caller (engine) does
+    // not mistake a temporary RPC failure for a permanently non-tradable
+    // token.
+    if (transientErr && revertCount < tiers.length) throw transientErr;
+    return null;
   }
 
   async function quoteMultihop(
@@ -260,6 +304,13 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
       )) as readonly [bigint, readonly bigint[], readonly number[], bigint];
       return result[0];
     } catch (err) {
+      if (!isContractRevert(err)) {
+        debug('uniswap-v3 multihop quoter transient error, propagating', {
+          label,
+          err: String(err).slice(0, 200),
+        });
+        throw err;
+      }
       debug('uniswap-v3 multihop quoter miss', { label, err: String(err) });
       return null;
     }
@@ -300,12 +351,20 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
       amountOut: bigint;
       path: `0x${string}`;
     } | null = null;
+    let transientErr: unknown = null;
+    let revertCount = 0;
     for (const r of results) {
       if (r.status === 'fulfilled') {
         if (!best || r.value.amountOut > best.amountOut) best = r.value;
+      } else {
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        if (/^no_multihop_/.test(msg)) revertCount++;
+        else if (!transientErr) transientErr = r.reason;
       }
     }
-    return best;
+    if (best) return best;
+    if (transientErr && revertCount < multihopFeePairs.length) throw transientErr;
+    return null;
   }
 
   /**
