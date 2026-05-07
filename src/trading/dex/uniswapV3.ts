@@ -178,11 +178,21 @@ export function createUniswapV3Adapter(opts: UniswapV3AdapterOptions): DexAdapte
     const tiers = preferredTier
       ? [preferredTier, ...feeTiers.filter((t) => t !== preferredTier)]
       : feeTiers;
+
+    const results = await Promise.allSettled(
+      tiers.map(async (tier) => {
+        const out = await quoteSingle(tokenIn, tokenOut, amountIn, tier);
+        if (out === null || out <= 0n) throw new Error(`no_quote_tier_${tier}`);
+        return { feeTier: tier, amountOut: out };
+      }),
+    );
+
     let best: { feeTier: number; amountOut: bigint } | null = null;
-    for (const tier of tiers) {
-      const out = await quoteSingle(tokenIn, tokenOut, amountIn, tier);
-      if (out !== null && out > 0n && (!best || out > best.amountOut)) {
-        best = { feeTier: tier, amountOut: out };
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        if (!best || result.value.amountOut > best.amountOut) {
+          best = result.value;
+        }
       }
     }
     return best;

@@ -379,31 +379,40 @@ export function createTradingEngine(deps: TradingEngineDeps): TradingEngine {
     const open = deps.store.listOpen();
     if (open.length === 0) return;
     const now = Date.now();
-    for (const pos of open) {
-      try {
-        const { priceUsd } = await priceTokenInUsdc(
-          deps.adapter,
-          pos.address,
-          pos.tokenDecimals,
-          pos.feeTier ?? undefined,
-        );
-        if (!Number.isFinite(priceUsd) || priceUsd <= 0) continue;
-        bumpHighestPrice(deps.db, pos.address, priceUsd);
-        // Re-read the position so highestPriceUsd reflects the bump.
-        const refreshed = deps.store.get(pos.address);
-        if (!refreshed || refreshed.status !== 'open') continue;
-        const decision = evaluateExit({
-          position: refreshed,
-          currentPriceUsd: priceUsd,
-          now,
-          config: deps.config.policy,
-        });
-        if (decision.shouldExit && decision.reason) {
-          await tryClose(refreshed, decision.reason, priceUsd);
-        }
-      } catch (err) {
-        await notifyError(pos.address, pos.symbol, 'monitor', err);
-      }
+
+    // Process in batches of 5 to avoid hitting RPC rate limits while still
+    // gaining performance over sequential execution.
+    const CONCURRENCY_LIMIT = 5;
+    for (let i = 0; i < open.length; i += CONCURRENCY_LIMIT) {
+      const chunk = open.slice(i, i + CONCURRENCY_LIMIT);
+      await Promise.allSettled(
+        chunk.map(async (pos) => {
+          try {
+            const { priceUsd } = await priceTokenInUsdc(
+              deps.adapter,
+              pos.address,
+              pos.tokenDecimals,
+              pos.feeTier ?? undefined,
+            );
+            if (!Number.isFinite(priceUsd) || priceUsd <= 0) return;
+            bumpHighestPrice(deps.db, pos.address, priceUsd);
+            // Re-read the position so highestPriceUsd reflects the bump.
+            const refreshed = deps.store.get(pos.address);
+            if (!refreshed || refreshed.status !== 'open') return;
+            const decision = evaluateExit({
+              position: refreshed,
+              currentPriceUsd: priceUsd,
+              now,
+              config: deps.config.policy,
+            });
+            if (decision.shouldExit && decision.reason) {
+              await tryClose(refreshed, decision.reason, priceUsd);
+            }
+          } catch (err) {
+            await notifyError(pos.address, pos.symbol, 'monitor', err);
+          }
+        }),
+      );
     }
   }
 
