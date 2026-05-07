@@ -11,6 +11,7 @@ export interface CreateLlmProviderOptions extends HandlerDeps {
   geminiApiKey?: string;
   ollamaHost?: string;
   ollamaRequestTimeoutMs?: number;
+  ollamaDisableTools?: boolean;
 }
 
 export function createLlmProvider(opts: CreateLlmProviderOptions): LlmProvider {
@@ -30,6 +31,7 @@ export function createLlmProvider(opts: CreateLlmProviderOptions): LlmProvider {
       model: opts.model,
       host: opts.ollamaHost,
       requestTimeoutMs: opts.ollamaRequestTimeoutMs,
+      disableTools: opts.ollamaDisableTools,
       oracle: opts.oracle,
       spend: opts.spend,
     });

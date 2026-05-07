@@ -30,6 +30,7 @@ export interface AgentProviderDeps extends HandlerDeps {
   geminiApiKey?: string;
   ollamaHost?: string;
   ollamaRequestTimeoutMs?: number;
+  ollamaDisableTools?: boolean;
 }
 
 export interface Agent {
@@ -62,6 +63,7 @@ export function createAgentWithProvider(deps: AgentProviderDeps): Agent {
       geminiApiKey: deps.geminiApiKey,
       ollamaHost: deps.ollamaHost,
       ollamaRequestTimeoutMs: deps.ollamaRequestTimeoutMs,
+      ollamaDisableTools: deps.ollamaDisableTools,
       oracle: deps.oracle,
       spend: deps.spend,
     }),

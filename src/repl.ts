@@ -312,8 +312,68 @@ export async function startRepl(deps: ReplDeps): Promise<void> {
     }
 
     try {
-      const reply = await deps.agent.send(line, { onToolStart, onToolEnd });
-      printAgent(reply);
+      const startedAt = Date.now();
+      const t = getTheme();
+      const c = t.colors;
+      const isTty = t.isTTY;
+      let firstChunkSeen = false;
+      let streamedContent = false;
+      let streamLineOpen = false;
+      const clearHeartbeat = (): void => {
+        // Erase the current TTY line; only valid on a real terminal.
+        if (isTty) output.write('\r\x1b[2K');
+      };
+      const openStreamLine = (): void => {
+        if (streamLineOpen) return;
+        clearHeartbeat();
+        output.write(`${t.glyphs.agent}  `);
+        streamLineOpen = true;
+      };
+      const closeStreamLine = (): void => {
+        if (!streamLineOpen) return;
+        output.write('\n');
+        streamLineOpen = false;
+      };
+      // No point in animating a heartbeat into a non-TTY (it'd just spam logs
+      // with one "still thinking" line every 5s that can never be erased).
+      const heartbeat = isTty
+        ? setInterval(() => {
+            if (firstChunkSeen) return;
+            const elapsedSec = Math.floor((Date.now() - startedAt) / 1000);
+            clearHeartbeat();
+            output.write(c.dim(`… still thinking (${elapsedSec}s)`));
+          }, 5000)
+        : null;
+      heartbeat?.unref?.();
+      const onStreamChunk = (delta: string): void => {
+        firstChunkSeen = true;
+        streamedContent = true;
+        if (!streamLineOpen) openStreamLine();
+        output.write(c.white(delta));
+      };
+      // If a model turn mixes streamed text with a tool call, the tool UI
+      // would otherwise overwrite the streamed line. Terminate the stream
+      // line first so the spinner / tool-end block lands cleanly.
+      const onToolStartWrapped = (ev: ToolCallEvent): void => {
+        closeStreamLine();
+        onToolStart(ev);
+      };
+      try {
+        const reply = await deps.agent.send(line, {
+          onToolStart: onToolStartWrapped,
+          onToolEnd,
+          onStreamChunk,
+        });
+        if (heartbeat) clearInterval(heartbeat);
+        if (streamedContent) {
+          closeStreamLine();
+        } else {
+          clearHeartbeat();
+          printAgent(reply);
+        }
+      } finally {
+        if (heartbeat) clearInterval(heartbeat);
+      }
     } catch (err) {
       clearSpinner();
       printError('agent error', err instanceof Error ? err.message : String(err));

@@ -15,6 +15,12 @@ export interface ToolEndEvent extends ToolCallEvent {
 export interface SendHooks {
   onToolStart?: (ev: ToolCallEvent) => void;
   onToolEnd?: (ev: ToolEndEvent) => void;
+  /**
+   * Invoked once per non-empty incremental assistant content delta from a
+   * streaming provider. Hook errors are swallowed by the caller — never let
+   * a UI hook abort the stream.
+   */
+  onStreamChunk?: (delta: string) => void;
 }
 
 export interface CandidateForEval {

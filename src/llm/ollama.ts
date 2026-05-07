@@ -44,6 +44,11 @@ export interface OllamaProviderOptions extends ProviderDeps {
    * inference to run for many minutes. Defaults to 30 minutes.
    */
   requestTimeoutMs?: number;
+  /**
+   * When true, omit the `tools` field from /api/chat. Diagnostic switch
+   * for small models that stall on the agent's tool-calling injection.
+   */
+  disableTools?: boolean;
 }
 
 interface OllamaTagsResponse {
@@ -156,11 +161,14 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
   const host = (opts.host ?? 'http://localhost:11434').replace(/\/+$/, '');
   const fetchImpl = opts.fetchImpl ?? fetch;
   const requestTimeoutMs = opts.requestTimeoutMs ?? 30 * 60 * 1000;
+  const disableTools = opts.disableTools === true;
 
   let messages: OllamaMessage[] = [{ role: 'system', content: SYSTEM_INSTRUCTION }];
 
   async function readNdjsonStream(
     body: ReadableStream<Uint8Array>,
+    onChunk?: (delta: string) => void,
+    onFrame?: () => void,
   ): Promise<OllamaChatResponse> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
@@ -183,10 +191,26 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
       if (chunk.error) {
         throw new Error(`ollama_error: ${chunk.error}`);
       }
+      if (onFrame) {
+        try {
+          onFrame();
+        } catch {
+          // never let a UI hook break the stream
+        }
+      }
       const m = chunk.message;
       if (m) {
         if (m.role) lastRole = m.role;
-        if (typeof m.content === 'string') content += m.content;
+        if (typeof m.content === 'string' && m.content.length > 0) {
+          if (onChunk) {
+            try {
+              onChunk(m.content);
+            } catch {
+              // never let a UI hook break the stream
+            }
+          }
+          content += m.content;
+        }
         if (m.tool_calls && m.tool_calls.length > 0) {
           toolCalls = (toolCalls ?? []).concat(m.tool_calls);
         }
@@ -239,7 +263,7 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
 
   async function callOllama(
     body: Record<string, unknown>,
-    options: { stream?: boolean } = {},
+    options: { stream?: boolean; onChunk?: (delta: string) => void } = {},
   ): Promise<OllamaChatResponse> {
     const url = `${host}/api/chat`;
     const stream = options.stream ?? true;
@@ -255,6 +279,24 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
       return err instanceof Error ? err : new Error(String(err));
     };
 
+    const startedAt = Date.now();
+    const msgCount = Array.isArray(body.messages) ? (body.messages as unknown[]).length : 0;
+    const toolCount = Array.isArray(body.tools) ? (body.tools as unknown[]).length : 0;
+    debug(
+      `ollama POST ${url} model=${String(body.model ?? '')} messages=${msgCount} tools=${toolCount} stream=${stream}`,
+    );
+    let firstFrameAt: number | null = null;
+    let firstChunkAt: number | null = null;
+    const stallTimer = setTimeout(() => {
+      if (firstFrameAt === null) {
+        process.stderr.write(
+          `[ollama] WARN no frame after 30s url=${url} model=${String(body.model ?? '')} ` +
+            `messages=${msgCount} tools=${toolCount}\n`,
+        );
+      }
+    }, 30_000);
+    stallTimer.unref?.();
+
     let res: Response;
     try {
       res = await fetchImpl(url, {
@@ -264,10 +306,12 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
         signal,
       });
     } catch (err) {
+      clearTimeout(stallTimer);
       throw wrapTimeout(err);
     }
 
     if (!res.ok) {
+      clearTimeout(stallTimer);
       const text = await res.text().catch(() => '');
       throw new Error(
         `ollama_request_failed: ${res.status} ${res.statusText} ${text.slice(0, 200)}`,
@@ -276,18 +320,44 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
 
     if (stream) {
       if (!res.body) {
+        clearTimeout(stallTimer);
         throw new Error('ollama_stream_failed: response has no body');
       }
       try {
-        return await readNdjsonStream(res.body);
+        const result = await readNdjsonStream(
+          res.body,
+          (delta) => {
+            if (firstChunkAt === null) firstChunkAt = Date.now();
+            options.onChunk?.(delta);
+          },
+          () => {
+            if (firstFrameAt === null) firstFrameAt = Date.now();
+          },
+        );
+        clearTimeout(stallTimer);
+        debug(
+          `ollama done url=${url} elapsedMs=${Date.now() - startedAt} ` +
+            `firstFrameMs=${firstFrameAt === null ? 'none' : firstFrameAt - startedAt} ` +
+            `firstChunkMs=${firstChunkAt === null ? 'none' : firstChunkAt - startedAt} ` +
+            `contentLen=${result.message?.content?.length ?? 0}`,
+        );
+        return result;
       } catch (err) {
+        clearTimeout(stallTimer);
         throw wrapTimeout(err);
       }
     }
 
+    clearTimeout(stallTimer);
     const json = (await res.json()) as OllamaChatResponse;
     if (json.error) throw new Error(`ollama_error: ${json.error}`);
+    debug(`ollama done(non-stream) url=${url} elapsedMs=${Date.now() - startedAt}`);
     return json;
+  }
+
+  function buildChatBody(extra: Record<string, unknown>): Record<string, unknown> {
+    if (disableTools) return extra;
+    return { ...extra, tools: TOOLS_JSON };
   }
 
   async function send(message: string, hooks?: SendHooks): Promise<string> {
@@ -297,11 +367,13 @@ export function createOllamaProvider(opts: OllamaProviderOptions): LlmProvider {
 
     let safetyHops = 0;
     for (;;) {
-      const response = await callOllama({
-        model: opts.model,
-        messages: [...messages, ...pending],
-        tools: TOOLS_JSON,
-      });
+      const response = await callOllama(
+        buildChatBody({
+          model: opts.model,
+          messages: [...messages, ...pending],
+        }),
+        { onChunk: hooks?.onStreamChunk },
+      );
       const msg = response.message ?? { role: 'assistant', content: '' };
       const toolCalls = msg.tool_calls ?? [];
       pending.push({
