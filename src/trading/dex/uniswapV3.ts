@@ -62,36 +62,104 @@ const ERC20_ABI = parseAbi([
 ]);
 
 /**
- * Retry an RPC read on transient rate-limit / network errors with
- * exponential backoff. Public Base RPC endpoints are aggressively throttled,
- * and a single 429 should not abort an entry/exit decision when the next
- * request a few hundred ms later will succeed.
+ * Collect the message text of an error AND every nested cause/details. Viem
+ * wraps the underlying transport error in a `ContractFunctionExecutionError`
+ * whose top-level message looks revert-y ("RPC Request failed.") but whose
+ * `cause`/`details` carry the real signal (e.g. `block not found`). We need
+ * to inspect the entire chain to classify correctly.
+ *
+ * NOTE: We deliberately ignore viem's `metaMessages` (the pretty-printed
+ * "Contract Call:" block). That block embeds the raw call data and contract
+ * address, so substrings like `429`/`502`/`503`/`504` can appear by
+ * coincidence in arg bytes and falsely trigger transient classification.
  */
-function isRateLimitError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return /over rate limit|rate.?limit|429|too many requests|request timed out/i.test(msg);
+function collectErrorText(err: unknown, depth = 0): string {
+  if (!err || depth > 5) return '';
+  if (typeof err !== 'object') return String(err);
+  const e = err as {
+    message?: unknown;
+    shortMessage?: unknown;
+    details?: unknown;
+    cause?: unknown;
+  };
+  const parts: string[] = [];
+  if (typeof e.message === 'string') parts.push(e.message);
+  if (typeof e.shortMessage === 'string') parts.push(e.shortMessage);
+  if (typeof e.details === 'string') parts.push(e.details);
+  if (e.cause) parts.push(collectErrorText(e.cause, depth + 1));
+  return parts.join('\n');
 }
+
+/**
+ * Signatures that indicate a transient RPC/transport failure rather than a
+ * deterministic on-chain outcome. Public Base RPC endpoints are aggressively
+ * throttled and load-balanced across nodes that can briefly disagree on the
+ * head block, so a single failure must not abort an entry/exit decision when
+ * the next request a few hundred ms later will succeed.
+ *
+ * Crucially, these must NEVER be classified as a contract revert: if they
+ * were, the quoter loop would treat them as "no pool at this tier" and the
+ * engine would mark the token permanently non-tradable on the first flake.
+ *
+ * Patterns are deliberately context-qualified — bare words like `timeout` or
+ * a stray `503` in arg bytes must NOT match, only RPC/HTTP-shaped phrases.
+ */
+const TRANSIENT_RPC_PATTERN =
+  /\b(over rate.?limit|rate.?limited?|too many requests|429 too many|request timed out|request timeout|read timeout|connect(ion)? timeout|block not found|header not found|unknown block|missing trie node|nonce too low|connection (refused|reset)|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network request failed|TLS handshake|HTTP\s*(429|502|503|504)|status\s*(429|502|503|504)|(429|502|503|504)\s*(too many requests|bad gateway|service unavailable|gateway timeout)|bad gateway|service unavailable|gateway timeout|upstream connect error)\b/i;
+
+function isTransientRpcError(err: unknown): boolean {
+  return TRANSIENT_RPC_PATTERN.test(collectErrorText(err));
+}
+
+/**
+ * Explicit revert phrases viem (or the node) emits for genuine on-chain
+ * reverts. Matching one of these is the strongest signal that the call
+ * failed deterministically rather than transiently.
+ *
+ * Includes the bare word "reverted" because viem's
+ * `ContractFunctionExecutionError` for empty reverts produces messages of
+ * the form "The contract function 'X' reverted." with no other revert
+ * keyword.
+ */
+const EXPLICIT_REVERT_PATTERN =
+  /execution reverted|reverted with|revert reason|\breverted\b|EVM error|invalid opcode|out of gas/i;
 
 /**
  * True when the error is a contract revert (e.g. quoter probing a non-existent
  * pool), which we want to treat as "no quote at this tier". Network/transport
- * errors should NOT be classified as reverts so they don't get swallowed and
+ * errors must NOT be classified as reverts so they don't get swallowed and
  * mistaken for a missing pool (which would falsely poison the non-tradable
  * cache).
+ *
+ * Precedence (in order):
+ *  1. Transient marker anywhere in the chain disqualifies the error from
+ *     being a revert. The cause/details are the most reliable evidence of
+ *     what actually went wrong; viem's top-level CFE message is only a
+ *     wrapper template (it can say "...reverted." even for transport
+ *     failures), so transient must win when it appears.
+ *  2. An explicit revert phrase classifies the error as a revert.
+ *  3. As a last resort, viem's `ContractFunctionRevertedError` /
+ *     `CallExecutionError` / `RawContractError` constructor names indicate a
+ *     revert. `ContractFunctionExecutionError` is intentionally NOT in
+ *     this list — viem reuses it for transport failures, and without an
+ *     explicit revert phrase we cannot safely assume it represents a real
+ *     revert. Treating it as "unknown" (returning false) lets the caller
+ *     propagate it rather than poisoning the non-tradable cache.
  */
 function isContractRevert(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
+  if (isTransientRpcError(err)) return false;
+  const text = collectErrorText(err);
+  if (EXPLICIT_REVERT_PATTERN.test(text)) return true;
   const name = (err as { name?: string }).name ?? '';
   if (
-    name === 'ContractFunctionExecutionError' ||
     name === 'ContractFunctionRevertedError' ||
     name === 'CallExecutionError' ||
     name === 'RawContractError'
   ) {
     return true;
   }
-  const msg = err instanceof Error ? err.message : String(err);
-  return /execution reverted|reverted with|EVM error|invalid opcode/i.test(msg);
+  return false;
 }
 
 async function withRpcRetry<T>(
@@ -105,7 +173,7 @@ async function withRpcRetry<T>(
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (!isRateLimitError(err) || i === attempts - 1) throw err;
+      if (!isTransientRpcError(err) || i === attempts - 1) throw err;
       const delayMs = 300 * 2 ** i + Math.floor(Math.random() * 150);
       debug('uniswap-v3 rpc retry', { label, attempt: i + 1, delayMs, err: String(err).slice(0, 200) });
       await new Promise((r) => setTimeout(r, delayMs));
