@@ -2,7 +2,7 @@
   "name": "svm402-agent",
   "version": "0.1.0",
   "private": true,
-  "description": "Gemini-driven CLI agent that exercises the base-token-oracle x402 payment flow on Base mainnet.",
+  "description": "LLM-driven CLI agent (Gemini or local Ollama) that exercises the base-token-oracle x402 payment flow on Base mainnet.",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

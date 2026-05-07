@@ -1,8 +1,8 @@
 # svm402-agent
 
-> Gemini-driven agent that exercises the [base-token-oracle](https://github.com/dchu3/base-token-oracle) x402 payment flow against Base mainnet via CLI or Telegram.
+> LLM-driven agent (Gemini or local Ollama) that exercises the [base-token-oracle](https://github.com/dchu3/base-token-oracle) x402 payment flow against Base mainnet via CLI or Telegram.
 
-An interactive agent where you chat in natural language about Base ERC-20 tokens. Gemini decides which oracle endpoint to call (`/report`), and the client signs a real USDC `transferWithAuthorization` per call via x402 v2.
+An interactive agent where you chat in natural language about Base ERC-20 tokens. The LLM decides which oracle endpoint to call (`/report`), and the client signs a real USDC `transferWithAuthorization` per call via x402 v2.
 
 > ⚠️ **DISCLAIMER:** This is experimental software provided as-is, with no warranties of any kind.
 > Cryptocurrency trading carries significant financial risk — you may lose some or all of your funds.
@@ -16,7 +16,24 @@ An interactive agent where you chat in natural language about Base ERC-20 tokens
 - **CLI REPL:** Rich terminal interface with spinners, tables, and a real-time spend bar.
 - **Telegram Bot:** A private, authenticated bot interface to chat with the agent on the go.
 - **x402 Payments:** Automatic signing and settlement of micro-payments for oracle reports.
-- **Gemini Powered:** Natural language analysis of token metadata, holders, and concentration data.
+- **Pluggable LLM:** Use Google Gemini or a local model via Ollama (e.g. `llama3.2:3b`) — switch with the `LLM_PROVIDER` env var.
+
+## Local LLM (Ollama)
+
+Run the agent fully offline (apart from the oracle) using a local Llama model:
+
+```bash
+ollama pull llama3.2:3b
+ollama serve            # listens on http://localhost:11434
+
+# Then in your .env:
+#   LLM_PROVIDER=ollama
+#   OLLAMA_MODEL=llama3.2:3b
+#   OLLAMA_HOST=http://localhost:11434  # optional; this is the default
+```
+
+GEMINI_API_KEY is not required when `LLM_PROVIDER=ollama`. The selected
+provider is used for both interactive chat and watchlist scoring.
 
 ## Quick start
 

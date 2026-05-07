@@ -24,7 +24,7 @@ describe('banner', () => {
       renderBanner({
         oracleUrl: 'https://svm402.com',
         walletAddress: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
-        model: 'gemini-2.5-flash',
+        provider: 'gemini', model: 'gemini-2.5-flash',
         spendCap: 0.1,
         usdcBalance: '1.234',
       }),
@@ -43,7 +43,7 @@ describe('banner', () => {
       renderBanner({
         oracleUrl: 'http://x',
         walletAddress: '0x' + '0'.repeat(40),
-        model: 'm',
+        provider: 'gemini', model: 'm',
         spendCap: 0.1,
         usdcBalance: '0.01',
       }),
@@ -56,7 +56,7 @@ describe('banner', () => {
       renderBanner({
         oracleUrl: 'http://x',
         walletAddress: '0x' + '0'.repeat(40),
-        model: 'm',
+        provider: 'gemini', model: 'm',
         spendCap: 0.1,
         usdcBalance: null,
         balanceError: 'rpc timeout',
