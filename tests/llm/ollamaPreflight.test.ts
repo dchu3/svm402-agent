@@ -56,4 +56,58 @@ describe('assertOllamaModelAvailable', () => {
       assertOllamaModelAvailable({ host: 'http://localhost:11434', model: 'llama3.2', fetchImpl }),
     ).rejects.toThrow(/tag listing failed.*500/);
   });
+
+  it('resolves when an explicit :latest tag matches a bare available name', async () => {
+    // Symmetric of the bare-vs-:latest case: user sets OLLAMA_MODEL=llama3.2:latest
+    // and /api/tags happens to return a bare "llama3.2" entry.
+    const fetchImpl = (async () =>
+      jsonResponse({ models: [{ name: 'llama3.2' }] })) as unknown as typeof fetch;
+    await expect(
+      assertOllamaModelAvailable({ host: 'http://localhost:11434', model: 'llama3.2:latest', fetchImpl }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('throws a clear payload-shape error when /api/tags returns the JSON literal null', async () => {
+    // res.json() resolves (does not reject) to null; must not crash with a
+    // raw TypeError. Caller should see an actionable diagnostic.
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      async json() {
+        return null;
+      },
+      async text() {
+        return 'null';
+      },
+    })) as unknown as typeof fetch;
+    await expect(
+      assertOllamaModelAvailable({ host: 'http://localhost:11434', model: 'llama3.2', fetchImpl }),
+    ).rejects.toThrow(/unexpected payload/i);
+  });
+
+  it('throws a clear payload-shape error when "models" is not an array', async () => {
+    const fetchImpl = (async () =>
+      jsonResponse({ models: { 'llama3.2': true } })) as unknown as typeof fetch;
+    await expect(
+      assertOllamaModelAvailable({ host: 'http://localhost:11434', model: 'llama3.2', fetchImpl }),
+    ).rejects.toThrow(/"models" was not an array/);
+  });
+
+  it('throws a clear non-JSON error when the body is not parseable', async () => {
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      async json() {
+        throw new SyntaxError('Unexpected token < in JSON at position 0');
+      },
+      async text() {
+        return '<html>...</html>';
+      },
+    })) as unknown as typeof fetch;
+    await expect(
+      assertOllamaModelAvailable({ host: 'http://localhost:11434', model: 'llama3.2', fetchImpl }),
+    ).rejects.toThrow(/non-JSON response/i);
+  });
 });

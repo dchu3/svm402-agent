@@ -76,16 +76,45 @@ export async function assertOllamaModelAvailable(opts: {
     );
   }
 
-  const json = (await res.json().catch(() => ({}))) as OllamaTagsResponse;
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Ollama returned a non-JSON response from ${url} (${reason}). ` +
+        `Is OLLAMA_HOST pointing at the Ollama server (and not, e.g., a proxy)?`,
+    );
+  }
+
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(
+      `Ollama returned an unexpected payload from ${url} (expected an object with a "models" array). ` +
+        `Is OLLAMA_HOST pointing at the Ollama server?`,
+    );
+  }
+
+  const json = parsed as OllamaTagsResponse;
+  if (json.models !== undefined && !Array.isArray(json.models)) {
+    throw new Error(
+      `Ollama returned an unexpected payload from ${url} ("models" was not an array). ` +
+        `Is OLLAMA_HOST pointing at the Ollama server?`,
+    );
+  }
   const available = (json.models ?? [])
     .map((m) => m.name ?? m.model ?? '')
     .filter((s) => s.length > 0);
 
   // Ollama tags are exact: "llama3.2" and "llama3.2:3b" are distinct entries.
-  // We also accept a bare name match against "<name>:latest" for convenience.
+  // For the common "<name>" vs "<name>:latest" case we treat the two as
+  // interchangeable in BOTH directions so a user-set `OLLAMA_MODEL=llama3.2`
+  // matches `llama3.2:latest` from /api/tags AND vice versa.
+  const stripLatest = (name: string) => name.replace(/:latest$/, '');
   const wanted = opts.model;
-  const wantedWithLatest = wanted.includes(':') ? wanted : `${wanted}:latest`;
-  const found = available.some((name) => name === wanted || name === wantedWithLatest);
+  const wantedNorm = stripLatest(wanted);
+  const found = available.some(
+    (name) => name === wanted || stripLatest(name) === wantedNorm,
+  );
   if (found) return;
 
   const list = available.length
